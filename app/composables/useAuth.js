@@ -12,6 +12,12 @@ export function useAuth() {
     user.value = response.data.user;
     csrf.value = null;
 
+    if (import.meta.client) {
+      sessionStorage.setItem("jmc-remember-me", String(Boolean(response.data.rememberMe)));
+
+      sessionStorage.setItem("jmc-last-activity", String(Date.now()));
+    }
+
     return response;
   }
 

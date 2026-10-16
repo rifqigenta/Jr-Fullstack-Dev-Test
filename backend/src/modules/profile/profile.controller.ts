@@ -4,9 +4,9 @@ import { z } from "zod";
 
 import type { AuthRequest } from "../../middlewares/auth.middleware.js";
 
-import { updateProfileSchema } from "./profile.schema.js";
+import { updateProfileSchema, changePasswordSchema } from "./profile.schema.js";
 
-import { getProfile, updateProfile, ProfileServiceError } from "./profile.service.js";
+import { getProfile, updateProfile, changeProfilePassword, ProfileServiceError } from "./profile.service.js";
 
 export async function showProfile(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -49,6 +49,40 @@ export async function patchProfile(req: AuthRequest, res: Response, next: NextFu
       success: true,
       message: "Profil berhasil diperbarui.",
       data: profile,
+    });
+  } catch (error) {
+    if (error instanceof ProfileServiceError) {
+      res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+      return;
+    }
+
+    next(error);
+  }
+}
+
+export async function patchProfilePassword(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const parsed = changePasswordSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        message: "Validasi password gagal.",
+        errors: z.flattenError(parsed.error),
+      });
+      return;
+    }
+
+    await changeProfilePassword(req.auth!.user.id, parsed.data);
+
+    res.clearCookie("jmc_token", { path: "/" });
+
+    res.status(200).json({
+      success: true,
+      message: "Password berhasil diganti. Silakan login kembali.",
     });
   } catch (error) {
     if (error instanceof ProfileServiceError) {

@@ -35,8 +35,12 @@ export default defineNuxtPlugin(() => {
   async function checkSession() {
     if (!user.value || isRemembered() || loggingOut) return;
 
-    const last = getLastActivity();
-    if (!last) return;
+    let last = getLastActivity();
+
+    if (!last) {
+      last = Date.now();
+      sessionStorage.setItem("jmc-last-activity", String(last));
+    }
 
     if (Date.now() - last >= TIMEOUT) {
       loggingOut = true;

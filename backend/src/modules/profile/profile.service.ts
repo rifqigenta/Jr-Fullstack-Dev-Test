@@ -1,6 +1,7 @@
 import { pool } from "../../config/database.js";
+import bcrypt from "bcryptjs";
 
-import type { UpdateProfileInput } from "./profile.schema.js";
+import type { UpdateProfileInput, ChangePasswordInput } from "./profile.schema.js";
 
 type ProfileRow = {
   id: number;
@@ -153,4 +154,71 @@ export async function updateProfile(userId: number, input: UpdateProfileInput) {
   }
 
   return getProfile(userId);
+}
+
+export async function changeProfilePassword(userId: number, input: ChangePasswordInput) {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const rows = await connection.query<Array<{ id: number; password_hash: string }>>(
+      `
+      SELECT id, password_hash
+      FROM \`user\`
+      WHERE id = ?
+        AND deleted_at IS NULL
+        AND disabled = 0
+      FOR UPDATE
+      `,
+      [userId],
+    );
+
+    if (!rows.length) {
+      throw new ProfileServiceError("Pengguna tidak ditemukan.", 404);
+    }
+
+    const valid = await bcrypt.compare(input.currentPassword, rows[0].password_hash);
+
+    if (!valid) {
+      throw new ProfileServiceError("Password lama salah.", 400);
+    }
+
+    const hash = await bcrypt.hash(input.newPassword, 12);
+
+    await connection.query(
+      `
+      UPDATE \`user\`
+      SET password_hash = ?,
+          updated_at = UTC_TIMESTAMP()
+      WHERE id = ?
+      `,
+      [hash, userId],
+    );
+
+    await connection.query(
+      `
+      UPDATE auth_sessions
+      SET revoked_at = UTC_TIMESTAMP(3)
+      WHERE id_user = ?
+        AND revoked_at IS NULL
+      `,
+      [userId],
+    );
+
+    await connection.query(
+      `
+      INSERT INTO activities (title, content, created_by)
+      VALUES (?, ?, ?)
+      `,
+      ["CHANGE_PASSWORD", "Pengguna mengganti password sendiri.", userId],
+    );
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
