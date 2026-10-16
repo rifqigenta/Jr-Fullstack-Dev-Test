@@ -105,7 +105,7 @@ onMounted(loadSettings);
 <template>
   <div>
     <div class="d-flex justify-content-between align-items-center mb-3">
-      <h2 class="mb-0">Pengaturan Tarif Transport</h2>
+      <h2 class="invisible">Pengaturan Tarif Transport</h2>
       <NuxtLink to="/tunjangan/transport" class="btn"> Kembali </NuxtLink>
     </div>
 

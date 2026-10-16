@@ -11,9 +11,8 @@ definePageMeta({
   title: "Setting Tunjangan Transport",
 });
 
-useSeoMeta({
-  title: "Setting Tunjangan Transport",
+await navigateTo("/tunjangan/transport/settings", {
+  redirectCode: 302,
+  replace: true,
 });
-
-import SettingFrom from "~/features/Tunjangan/components/SettingForm.vue";
 </script>

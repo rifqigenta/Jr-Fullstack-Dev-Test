@@ -1,10 +1,4 @@
-import {
-  IconLayoutDashboardFilled,
-  IconUserFilled,
-  IconDatabaseFilled,
-  IconUsers,
-  IconHistory,
-} from "@tabler/icons-vue";
+import { IconLayoutDashboardFilled, IconUserFilled, IconDatabaseFilled, IconUsers, IconHistory } from "@tabler/icons-vue";
 
 export const menuItems = [
   {
@@ -23,7 +17,7 @@ export const menuItems = [
     children: [
       {
         title: "Setting Tunjangan Transport",
-        to: "/tunjangan/setting",
+        to: "/tunjangan/transport/settings",
       },
       {
         title: "Tunjangan Transport",

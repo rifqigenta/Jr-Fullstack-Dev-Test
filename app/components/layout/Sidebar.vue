@@ -20,7 +20,7 @@ const menuPermissions = {
 
   "manager hrd": ["/", "/pegawai", "/tunjangan/transport"],
 
-  "admin hrd": ["/", "/pegawai", "/tunjangan/setting", "/tunjangan/transport"],
+  "admin hrd": ["/", "/pegawai", "/tunjangan/transport/settings", "/tunjangan/transport"],
 };
 
 // Filter menu tanpa mengubah menuItems asli
