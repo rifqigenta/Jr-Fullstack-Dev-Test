@@ -219,7 +219,7 @@ onMounted(loadUsers);
 <template>
   <div>
     <div class="d-flex justify-content-between align-items-center mb-3">
-      <h2 class="mb-0">Manajemen User</h2>
+      <h2 class="mb-0 invisible">Manajemen User</h2>
       <button class="btn btn-primary" @click="openCreate">+ Tambah User</button>
     </div>
 

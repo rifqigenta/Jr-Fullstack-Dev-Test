@@ -167,7 +167,7 @@ onMounted(async () => {
 <template>
   <div>
     <div class="d-flex justify-content-between align-items-center mb-3">
-      <h2 class="mb-0">Tunjangan Transport</h2>
+      <h2 class="mb-0 invisible">Tunjangan Transport</h2>
 
       <NuxtLink v-if="adminMode" to="/tunjangan/transport/settings" class="btn btn-primary"> Pengaturan Tarif </NuxtLink>
     </div>
