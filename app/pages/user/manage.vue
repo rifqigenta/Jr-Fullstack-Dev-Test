@@ -1,318 +1,385 @@
-<template>
-  <NuxtLayout name="default">
-    <template #actions>
-      <button
-        class="btn btn-primary"
-        data-bs-toggle="modal"
-        data-bs-target="#modal-add"
-      >
-        <IconPlus stroke="{3}" size="20" />Tambah
-      </button>
-    </template>
-    <div class="card">
-      <div class="card-header">
-        <div class="d-flex gap-2 ms-auto">
-          <!-- Filter Role -->
-          <select name="" id="" class="form-select">
-            <template v-for="(item, index) in roleOptions" :key="index">
-              <option :value="item.value">{{ item.label }}</option>
-            </template>
-          </select>
+<script setup>
+definePageMeta({ title: "Manajemen User" });
 
-          <!-- Search -->
-          <div class="input-group">
-            <input
-              type="text"
-              class="form-control"
-              placeholder="Cari Data ..."
-            />
-            <button class="btn" type="button">
-              <IconSearch stroke="{2}" />
-            </button>
+const { request } = useApi();
+
+const users = ref([]);
+const roles = ref([]);
+const employees = ref([]);
+const page = ref(1);
+const pagination = ref({});
+const search = ref("");
+const keyword = ref("");
+const loading = ref(false);
+const saving = ref(false);
+const error = ref("");
+const success = ref("");
+const editingId = ref(null);
+const showForm = ref(false);
+const generatedPassword = ref("");
+const generatedUsername = ref("");
+
+const form = reactive({
+  id_pegawai: "",
+  id_role: "",
+  username: "",
+  nama: "",
+  email: "",
+});
+
+function getError(e) {
+  const fields = e?.data?.errors?.fieldErrors;
+  const details = fields
+    ? Object.entries(fields)
+        .flatMap(([key, messages]) => (messages || []).map((msg) => `${key}: ${msg}`))
+        .join("; ")
+    : "";
+
+  return details || e?.data?.message || "Terjadi kesalahan.";
+}
+
+async function loadUsers() {
+  loading.value = true;
+  error.value = "";
+
+  try {
+    const res = await request("/users", {
+      query: {
+        page: page.value,
+        limit: 10,
+        search: keyword.value,
+      },
+    });
+
+    users.value = res.data || [];
+    pagination.value = res.pagination || {};
+  } catch (e) {
+    error.value = getError(e);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadOptions() {
+  try {
+    const [roleRes, employeeRes] = await Promise.all([
+      request("/roles"),
+      request("/users/employee-options", {
+        query: { limit: 50 },
+      }),
+    ]);
+
+    roles.value = roleRes.data || [];
+    employees.value = employeeRes.data || [];
+  } catch (e) {
+    error.value = getError(e);
+  }
+}
+
+function resetForm() {
+  editingId.value = null;
+  showForm.value = false;
+  Object.assign(form, {
+    id_pegawai: "",
+    id_role: "",
+    username: "",
+    nama: "",
+    email: "",
+  });
+}
+
+function openCreate() {
+  resetForm();
+  showForm.value = true;
+  loadOptions();
+  generatedPassword.value = "";
+  generatedUsername.value = "";
+}
+
+async function copyCredentials() {
+  if (!generatedPassword.value) return;
+
+  await navigator.clipboard.writeText(`Username: ${generatedUsername.value}\nPassword: ${generatedPassword.value}`);
+}
+
+async function openEdit(user) {
+  error.value = "";
+
+  try {
+    const res = await request(`/users/${user.id}`);
+    const detail = res.data;
+
+    editingId.value = detail.id;
+    Object.assign(form, {
+      id_pegawai: detail.id_pegawai ?? "",
+      id_role: detail.id_role,
+      username: detail.username,
+      nama: detail.nama,
+      email: detail.email || "",
+    });
+
+    showForm.value = true;
+    await loadOptions();
+  } catch (e) {
+    error.value = getError(e);
+  }
+}
+
+async function saveUser() {
+  saving.value = true;
+  error.value = "";
+  success.value = "";
+
+  try {
+    const payload = {
+      username: form.username.trim(),
+      nama: form.nama.trim(),
+      email: form.email.trim(),
+      id_role: Number(form.id_role),
+      id_pegawai: form.id_pegawai ? Number(form.id_pegawai) : null,
+    };
+
+    if (!editingId.value && !payload.id_pegawai) {
+      throw new Error("Pilih pegawai terlebih dahulu.");
+    }
+
+    const res = await request(editingId.value ? `/users/${editingId.value}` : "/users", {
+      method: editingId.value ? "PATCH" : "POST",
+      body: payload,
+    });
+
+    if (!editingId.value) {
+      generatedPassword.value = res.data?.generatedPassword || "";
+      generatedUsername.value = res.data?.username || payload.username;
+    }
+
+    success.value = res.message || "User berhasil disimpan.";
+    resetForm();
+    await loadUsers();
+  } catch (e) {
+    error.value = getError(e);
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function toggleStatus(user) {
+  const action = user.disabled ? "aktifkan" : "nonaktifkan";
+  if (!confirm(`Yakin ingin ${action} ${user.username}?`)) return;
+
+  error.value = "";
+  success.value = "";
+
+  try {
+    await request(`/users/${user.id}/status`, {
+      method: "PATCH",
+      body: { disabled: !user.disabled },
+    });
+
+    success.value = "Status user berhasil diperbarui.";
+    await loadUsers();
+  } catch (e) {
+    error.value = getError(e);
+  }
+}
+
+async function deleteUser(user) {
+  if (!confirm(`Hapus user ${user.username}?`)) return;
+
+  error.value = "";
+  success.value = "";
+
+  try {
+    await request(`/users/${user.id}`, {
+      method: "DELETE",
+    });
+
+    success.value = "User berhasil dihapus.";
+    await loadUsers();
+  } catch (e) {
+    error.value = getError(e);
+  }
+}
+
+function applySearch() {
+  page.value = 1;
+  keyword.value = search.value.trim();
+  loadUsers();
+}
+
+function changePage(next) {
+  if (next < 1 || next > (pagination.value.totalPages || 1)) return;
+  page.value = next;
+  loadUsers();
+}
+
+onMounted(loadUsers);
+</script>
+
+<template>
+  <div>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="mb-0">Manajemen User</h2>
+      <button class="btn btn-primary" @click="openCreate">+ Tambah User</button>
+    </div>
+
+    <div v-if="error" class="alert alert-danger">{{ error }}</div>
+    <div v-if="success" class="alert alert-success">{{ success }}</div>
+    <div v-if="generatedPassword" class="alert alert-warning">
+      <h4 class="alert-title">Akun baru berhasil dibuat!</h4>
+
+      <p class="mb-2">Simpan kredensial berikut. Password hanya ditampilkan sekali dan tidak dapat dilihat kembali.</p>
+
+      <div class="mb-2">
+        <strong>Username:</strong>
+        <code>{{ generatedUsername }}</code>
+      </div>
+
+      <div class="mb-3">
+        <strong>Password sementara:</strong>
+        <code>{{ generatedPassword }}</code>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-sm btn-primary" @click="copyCredentials">Salin Kredensial</button>
+
+        <button
+          type="button"
+          class="btn btn-sm"
+          @click="
+            generatedPassword = '';
+            generatedUsername = '';
+          "
+        >
+          Tutup
+        </button>
+      </div>
+    </div>
+
+    <div v-if="showForm" class="card mb-3">
+      <div class="card-header">
+        <h3 class="card-title">
+          {{ editingId ? "Edit User" : "Tambah User" }}
+        </h3>
+      </div>
+
+      <form @submit.prevent="saveUser">
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Pegawai</label>
+              <select v-model="form.id_pegawai" class="form-select" :required="!editingId">
+                <option value="">Pilih Pegawai</option>
+                <option v-for="employee in employees" :key="employee.id" :value="employee.id">{{ employee.nip }} - {{ employee.nama_pegawai }}</option>
+                <option v-if="editingId && form.id_pegawai && !employees.some((e) => e.id === Number(form.id_pegawai))" :value="Number(form.id_pegawai)">
+                  Pegawai tersimpan (ID {{ form.id_pegawai }})
+                </option>
+              </select>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Role</label>
+              <select v-model="form.id_role" class="form-select" required>
+                <option value="">Pilih Role</option>
+                <option v-for="role in roles" :key="role.id" :value="role.id">
+                  {{ role.nama_role }}
+                </option>
+              </select>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Username</label>
+              <input v-model="form.username" class="form-control" minlength="6" maxlength="50" pattern="[a-z0-9]+" required />
+              <small class="text-secondary"> Minimal 6 karakter, huruf kecil dan angka. </small>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Nama</label>
+              <input v-model="form.nama" class="form-control" minlength="2" required />
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">Email</label>
+              <input v-model="form.email" type="email" class="form-control" required />
+            </div>
           </div>
         </div>
+
+        <div class="card-footer d-flex justify-content-end gap-2">
+          <button type="button" class="btn" @click="resetForm">Batal</button>
+          <button type="submit" class="btn btn-primary" :disabled="saving">
+            {{ saving ? "Menyimpan..." : "Simpan User" }}
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <form class="input-group ms-auto" style="max-width: 300px" @submit.prevent="applySearch">
+          <input v-model="search" class="form-control" placeholder="Cari user..." />
+          <button class="btn btn-primary" type="submit">Cari</button>
+        </form>
       </div>
-      <div class="table-responsive card-body p-0">
-        <table class="table table-vcenter">
+
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
           <thead>
             <tr>
-              <th width="5">No</th>
-              <th width="15">Action</th>
-              <th>Nama Pengguna</th>
+              <th>No</th>
               <th>Username</th>
-              <th>Jabatan</th>
-              <th>Departemen</th>
+              <th>Nama</th>
+              <th>Email</th>
               <th>Role</th>
+              <th>Pegawai</th>
               <th>Status</th>
+              <th>Aksi</th>
             </tr>
           </thead>
-          <tbody v-for="(item, index) in manajemenUser" :key="item.id">
-            <tr>
-              <td class="text-center">{{ index + 1 }}</td>
-              <td class="text-nowrap">
-                <div class="d-flex">
-                  <!-- Aksi Edit -->
-                  <a
-                    href="#"
-                    class="text-dark"
-                    data-bs-toggle="modal"
-                    data-bs-target="#modal-add"
-                  >
-                    <span
-                      data-bs-toggle="tooltip"
-                      data-bs-placement="bottom"
-                      title="Edit"
-                    >
-                      <IconPencil stroke="{1}" size="20" />
-                    </span>
-                  </a>
 
-                  <!-- Aksi Hapus -->
-                  <a
-                    href="#"
-                    class="text-danger"
-                    data-bs-toggle="modal"
-                    data-bs-target="#modal-hapus"
-                  >
-                    <span
-                      data-bs-toggle="tooltip"
-                      data-bs-placement="bottom"
-                      title="Hapus"
-                    >
-                      <IconTrash stroke="{1}" size="20" />
-                    </span>
-                  </a>
+          <tbody>
+            <tr v-if="loading">
+              <td colspan="8" class="text-center py-4">Memuat...</td>
+            </tr>
+
+            <tr v-for="(item, i) in users" :key="item.id">
+              <td>{{ (page - 1) * 10 + i + 1 }}</td>
+              <td>{{ item.username }}</td>
+              <td>{{ item.nama }}</td>
+              <td>{{ item.email }}</td>
+              <td>{{ item.nama_role }}</td>
+              <td>{{ item.nama_pegawai || "-" }}</td>
+              <td>
+                <span class="badge" :class="item.disabled ? 'bg-danger-lt' : 'bg-success-lt'">
+                  {{ item.disabled ? "Nonaktif" : "Aktif" }}
+                </span>
+              </td>
+              <td>
+                <div class="d-flex flex-wrap gap-1">
+                  <button class="btn btn-sm btn-outline-primary" @click="openEdit(item)">Edit</button>
+                  <button class="btn btn-sm btn-outline-warning" @click="toggleStatus(item)">
+                    {{ item.disabled ? "Aktifkan" : "Nonaktifkan" }}
+                  </button>
+                  <button class="btn btn-sm btn-outline-danger" @click="deleteUser(item)">Hapus</button>
                 </div>
               </td>
-              <td>{{ item.nama }}</td>
-              <td>{{ item.username }}</td>
-              <td>{{ item.jabatan }}</td>
-              <td>{{ item.departemen }}</td>
-              <td>{{ item.role }}</td>
-              <td>{{ item.isActive ? "Aktif" : "Tidak Aktif" }}</td>
+            </tr>
+
+            <tr v-if="!loading && users.length === 0">
+              <td colspan="8" class="text-center py-4">Tidak ada user.</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <div class="card-footer d-flex align-items-center">
-        <ul class="pagination ms-auto m-0">
-          <li class="page-item"><a class="page-link" href="#">1</a></li>
-          <li class="page-item active">
-            <a class="page-link" href="#">2</a>
-          </li>
-          <li class="page-item"><a class="page-link" href="#">3</a></li>
-          <li class="page-item"><a class="page-link" href="#">4</a></li>
-          <li class="page-item"><a class="page-link" href="#">5</a></li>
-          <li class="page-item">
-            <a class="page-link" href="#">
-              next
-              <!-- Download SVG icon from http://tabler-icons.io/i/chevron-right -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                class="icon"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                stroke-width="2"
-                stroke="currentColor"
-                fill="none"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                <path d="M9 6l6 6l-6 6"></path>
-              </svg>
-            </a>
-          </li>
-        </ul>
-      </div>
 
-      <!-- Modal Tambah/Edit User -->
-      <div class="modal modal-blur fade" id="modal-add">
-        <div class="modal-dialog modal-dialog-centered" role="document">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h5 class="modal-title">Form Manajemen User</h5>
-              <button
-                type="button"
-                class="btn-close"
-                data-bs-dismiss="modal"
-                aria-label="Close"
-              ></button>
-            </div>
-            <div class="modal-body">
-              <!-- NAMA -->
-              <div class="mb-3">
-                <label class="form-label">Nama Lengkap</label>
-                <input type="text" class="form-control" />
-              </div>
-
-              <!-- USERNAME -->
-              <div class="mb-3">
-                <label class="form-label">Username</label>
-                <input type="text" class="form-control" />
-              </div>
-
-              <!-- JABATAN -->
-              <div class="mb-3">
-                <label class="form-label">Jabatan</label>
-                <select name="" id="" class="form-select">
-                  <option value="" selected disabled>
-                    Pilih terlebih dahulu
-                  </option>
-                  <option value="">Programmer</option>
-                  <option value="">System Analist</option>
-                  <option value="">Akuntan</option>
-                  <option value="">Manager Produksi</option>
-                </select>
-              </div>
-
-              <!-- DEPARTEMEN -->
-              <div class="mb-3">
-                <label class="form-label">Departemen</label>
-                <select name="" id="" class="form-select">
-                  <option value="" selected disabled>
-                    Pilih terlebih dahulu
-                  </option>
-                  <option value="">Produksi</option>
-                  <option value="">Finance</option>
-                  <option value="">Direksi</option>
-                </select>
-              </div>
-
-              <!-- ROLE -->
-              <div class="mb-3">
-                <label class="form-label">Role</label>
-                <select name="" id="" class="form-select">
-                  <option value="" selected disabled>
-                    Pilih terlebih dahulu
-                  </option>
-                  <option value="">Admin</option>
-                  <option value="">Member</option>
-                </select>
-              </div>
-
-              <!-- PASSWORD -->
-              <div class="mb-3">
-                <label class="form-label">Password</label>
-                <input type="password" class="form-control mb-1" />
-                <button class="btn btn-primary">Generate Password</button>
-              </div>
-
-              <!-- STATUS -->
-              <div>
-                <label class="form-label">Status</label>
-                <label class="form-check">
-                  <input class="form-check-input" type="checkbox" />
-                  <span class="form-check-label">Aktif</span>
-                </label>
-              </div>
-            </div>
-            <div class="modal-footer">
-              <div class="d-flex gap-2 ms-auto">
-                <button type="button" class="btn" data-bs-dismiss="modal">
-                  Kembali
-                </button>
-                <button type="button" class="btn btn-primary">
-                  <i class="ti ti-check me-1"></i> Simpan
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Modal Hapus -->
-      <div class="modal modal-blur fade" id="modal-hapus">
-        <div
-          class="modal-dialog modal-sm modal-dialog-centered"
-          role="document"
-        >
-          <div class="modal-content">
-            <button
-              type="button"
-              class="btn-close"
-              data-bs-dismiss="modal"
-              aria-label="Close"
-            ></button>
-            <div class="modal-status bg-danger"></div>
-            <div class="modal-body text-center py-4">
-              <!-- Download SVG icon from http://tabler.io/icons/icon/alert-triangle -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class="icon mb-2 text-danger icon-lg"
-              >
-                <path d="M12 9v4"></path>
-                <path
-                  d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z"
-                ></path>
-                <path d="M12 16h.01"></path>
-              </svg>
-              <h3 class="mb-1">Hapus Data</h3>
-              <div class="text-secondary">
-                Apakah kamu ingin menghapus data ini ?
-              </div>
-            </div>
-            <div class="modal-footer">
-              <div class="w-100">
-                <div class="row">
-                  <div class="col">
-                    <a href="#" class="btn btn-3 w-100" data-bs-dismiss="modal">
-                      Batal
-                    </a>
-                  </div>
-                  <div class="col">
-                    <a
-                      href="#"
-                      class="btn btn-danger btn-4 w-100"
-                      data-bs-dismiss="modal"
-                    >
-                      Hapus
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+      <div class="card-footer d-flex justify-content-between">
+        <span>{{ pagination.total || 0 }} user</span>
+        <div class="btn-list">
+          <button class="btn btn-sm" :disabled="page <= 1" @click="changePage(page - 1)">Sebelumnya</button>
+          <span class="align-self-center">{{ page }}</span>
+          <button class="btn btn-sm" :disabled="page >= (pagination.totalPages || 1)" @click="changePage(page + 1)">Berikutnya</button>
         </div>
       </div>
     </div>
-  </NuxtLayout>
+  </div>
 </template>
-
-<script setup>
-definePageMeta({
-  title: "Manajemen User",
-  layout: false,
-});
-
-useSeoMeta({
-  title: "Manajemen User",
-});
-
-import { IconPencil, IconPlus, IconSearch, IconTrash } from "@tabler/icons-vue";
-import { manajemenUser } from "~/data/manajemen-user.js";
-
-const roleOptions = [
-  {
-    label: "Semua Role",
-    value: "",
-  },
-  {
-    label: "Admin",
-    value: "admin",
-  },
-  {
-    label: "Super Admin",
-    value: "super admin",
-  },
-];
-</script>

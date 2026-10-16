@@ -176,7 +176,7 @@ export async function getEmployeeOptions(search: string, limit: number) {
       p.nomor_hp
     FROM pegawai p
     WHERE p.deleted_at IS NULL
-      (
+      AND (
         p.nama_pegawai LIKE ?
         OR p.nip LIKE ?
         OR p.email LIKE ?

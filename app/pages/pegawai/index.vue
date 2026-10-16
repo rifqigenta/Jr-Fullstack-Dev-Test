@@ -1,239 +1,192 @@
 <script setup>
+import { IconPencil, IconPlus, IconSearch, IconTrash, IconFileDescription } from "@tabler/icons-vue";
+
 definePageMeta({
   title: "Data Pegawai",
   layout: false,
 });
 
-useSeoMeta({
-  title: "Data Pegawai",
+useSeoMeta({ title: "Data Pegawai" });
+
+const { request } = useApi();
+
+const employees = ref([]);
+const pagination = ref({});
+const loading = ref(false);
+const error = ref("");
+
+const page = ref(1);
+const search = ref("");
+const keyword = ref("");
+const statusKontrak = ref("");
+
+async function loadEmployees() {
+  loading.value = true;
+  error.value = "";
+
+  try {
+    const response = await request("/employees", {
+      query: {
+        page: page.value,
+        limit: 10,
+        search: keyword.value,
+        ...(statusKontrak.value ? { status_kontrak: statusKontrak.value } : {}),
+      },
+    });
+
+    employees.value = response.data || [];
+    pagination.value = response.pagination || {};
+  } catch (e) {
+    error.value = e?.data?.message || "Gagal mengambil data pegawai.";
+  } finally {
+    loading.value = false;
+  }
+}
+
+function submitSearch() {
+  page.value = 1;
+  keyword.value = search.value.trim();
+  loadEmployees();
+}
+
+function changePage(nextPage) {
+  if (nextPage < 1) return;
+
+  page.value = nextPage;
+  loadEmployees();
+}
+
+async function deleteEmployee(employee) {
+  if (!confirm(`Hapus pegawai ${employee.nama_pegawai}?`)) {
+    return;
+  }
+
+  try {
+    await request(`/employees/${employee.id}`, {
+      method: "DELETE",
+    });
+
+    await loadEmployees();
+  } catch (e) {
+    alert(e?.data?.message || "Gagal menghapus pegawai.");
+  }
+}
+
+watch(statusKontrak, () => {
+  page.value = 1;
+  loadEmployees();
 });
 
-import {
-  IconPencil,
-  IconPlus,
-  IconSearch,
-  IconTrash,
-  IconFileDescription,
-  IconCloudDownload,
-} from "@tabler/icons-vue";
-import { dataPegawai } from "~/data/data-pegawai.js";
-import { formatDateID } from "~/utils/formatDate.js";
+onMounted(loadEmployees);
 </script>
 
 <template>
   <NuxtLayout name="default">
     <template #actions>
       <NuxtLink to="/pegawai/form" class="btn btn-primary">
-        <IconPlus stroke="{3}" size="20" />Tambah
+        <IconPlus :size="20" />
+        Tambah Pegawai
       </NuxtLink>
     </template>
+
     <div class="card">
       <div class="card-header">
-        <div class="d-flex gap-2 ms-auto">
-          <!-- Masa Kerja -->
-          <div class="d-flex align-items-center gap-1">
-            <span class="text-nowrap">Masa Kerja</span>
-            <input type="number" class="form-control" style="width: 60px" />
-            -
-            <input type="number" class="form-control" style="width: 60px" />
-          </div>
-          <!-- Filter Jabatan -->
-          <select name="" id="" class="form-select" style="width: 180px">
-            <option value="">Semua Jabatan</option>
-            <option value="">Programmer</option>
-            <option value="">System Analyst</option>
-            <option value="">Akuntan</option>
-            <option value="">Manager Produksi</option>
+        <div class="d-flex flex-wrap gap-2 ms-auto">
+          <select v-model="statusKontrak" class="form-select" style="width: 180px">
+            <option value="">Semua Kontrak</option>
+            <option value="PKWTT">PKWTT</option>
+            <option value="PKWT">PKWT</option>
+            <option value="Magang">Magang</option>
           </select>
 
-          <!-- Filter Kontrak -->
-          <select name="" id="" class="form-select" style="width: 180px">
-            <option value="">Status Kontrak</option>
-            <option value="">PKWTT</option>
-            <option value="">PKWT</option>
-          </select>
+          <form class="input-group" style="width: 250px" @submit.prevent="submitSearch">
+            <input v-model="search" class="form-control" placeholder="Cari pegawai..." />
 
-          <!-- Search -->
-          <div class="input-group" style="width: 200px">
-            <input
-              type="text"
-              class="form-control"
-              placeholder="Cari Data ..."
-            />
-            <button class="btn" type="button">
-              <IconSearch stroke="{2}" />
+            <button class="btn" type="submit">
+              <IconSearch :size="18" />
             </button>
-          </div>
+          </form>
         </div>
       </div>
-      <div class="table-responsive card-body p-0">
-        <table class="table table-vcenter">
+
+      <div v-if="error" class="alert alert-danger m-3">
+        {{ error }}
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
           <thead>
             <tr>
-              <th width="5">No</th>
-              <th width="15" class="text-center">Aksi</th>
+              <th>No</th>
+              <th>Aksi</th>
               <th>NIP</th>
               <th>Nama</th>
               <th>Jabatan</th>
               <th>Tanggal Masuk</th>
-              <th>Masa Kerja</th>
+              <th>Status</th>
             </tr>
           </thead>
+
           <tbody>
-            <tr v-for="(item, index) in dataPegawai" :key="item.nip">
-              <td class="text-center">{{ index + 1 }}</td>
-              <td class="text-nowrap">
-                <div class="d-flex">
-                  <!-- Aksi Edit -->
-                  <NuxtLink :to="`/pegawai/form/${item.nip}`" class="text-dark">
-                    <span
-                      data-bs-toggle="tooltip"
-                      data-bs-placement="bottom"
-                      title="Edit"
-                    >
-                      <IconPencil stroke="{1}" size="20" />
-                    </span>
+            <tr v-if="loading">
+              <td colspan="7" class="text-center py-4">Memuat data...</td>
+            </tr>
+
+            <tr v-else-if="employees.length === 0">
+              <td colspan="7" class="text-center py-4">Tidak ada data pegawai.</td>
+            </tr>
+
+            <tr v-for="(employee, index) in employees" v-else :key="employee.id">
+              <td>
+                {{ (page - 1) * 10 + index + 1 }}
+              </td>
+
+              <td>
+                <div class="d-flex gap-2">
+                  <NuxtLink :to="`/pegawai/form/${employee.id}`" class="text-dark" title="Edit">
+                    <IconPencil :size="20" />
                   </NuxtLink>
 
-                  <!-- Aksi Detail -->
-                  <NuxtLink :to="`/pegawai/${item.nip}`" class="text-dark">
-                    <span
-                      data-bs-toggle="tooltip"
-                      data-bs-placement="bottom"
-                      title="Detail"
-                    >
-                      <IconFileDescription stroke="{1}" size="20" />
-                    </span>
+                  <NuxtLink :to="`/pegawai/${employee.id}`" class="text-dark" title="Detail">
+                    <IconFileDescription :size="20" />
                   </NuxtLink>
 
-                  <!-- Aksi Download -->
-                  <a href="#" class="text-dark">
-                    <span
-                      data-bs-toggle="tooltip"
-                      data-bs-placement="bottom"
-                      title="Download"
-                    >
-                      <IconCloudDownload stroke="{1}" size="20" />
-                    </span>
-                  </a>
-
-                  <!-- Aksi Hapus -->
-                  <a
-                    href="#"
-                    class="text-danger"
-                    data-bs-toggle="modal"
-                    data-bs-target="#modal-hapus"
-                  >
-                    <span
-                      data-bs-toggle="tooltip"
-                      data-bs-placement="bottom"
-                      title="Hapus"
-                    >
-                      <IconTrash stroke="{1}" size="20" />
-                    </span>
-                  </a>
+                  <button type="button" class="btn btn-link text-danger p-0" title="Hapus" @click="deleteEmployee(employee)">
+                    <IconTrash :size="20" />
+                  </button>
                 </div>
               </td>
-              <td>{{ item.nip }}</td>
-              <td>{{ item.nama }}</td>
-              <td>{{ item.jabatan }}</td>
-              <td>{{ formatDateID(item.tanggalMasuk) }}</td>
-              <td>{{ item.masaKerja }}</td>
+
+              <td>{{ employee.nip }}</td>
+              <td>{{ employee.nama_pegawai }}</td>
+              <td>
+                {{ employee.nama_jabatan || "-" }}
+              </td>
+              <td>
+                {{ employee.tanggal_masuk ? String(employee.tanggal_masuk).slice(0, 10) : "-" }}
+              </td>
+              <td>
+                <span class="badge" :class="employee.status === 'Aktif' ? 'bg-success-lt' : 'bg-secondary-lt'">
+                  {{ employee.status }}
+                </span>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <div class="card-footer d-flex align-items-center">
-        <ul class="pagination ms-auto m-0">
-          <li class="page-item"><a class="page-link" href="#">1</a></li>
-          <li class="page-item active"><a class="page-link" href="#">2</a></li>
-          <li class="page-item"><a class="page-link" href="#">3</a></li>
-          <li class="page-item"><a class="page-link" href="#">4</a></li>
-          <li class="page-item"><a class="page-link" href="#">5</a></li>
-          <li class="page-item">
-            <a class="page-link" href="#">
-              next
-              <!-- Download SVG icon from http://tabler-icons.io/i/chevron-right -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                class="icon"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                stroke-width="2"
-                stroke="currentColor"
-                fill="none"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                <path d="M9 6l6 6l-6 6"></path>
-              </svg>
-            </a>
-          </li>
-        </ul>
-      </div>
 
-      <!-- Modal Hapus -->
-      <div class="modal modal-blur fade" id="modal-hapus">
-        <div
-          class="modal-dialog modal-sm modal-dialog-centered"
-          role="document"
-        >
-          <div class="modal-content">
-            <button
-              type="button"
-              class="btn-close"
-              data-bs-dismiss="modal"
-              aria-label="Close"
-            ></button>
-            <div class="modal-status bg-danger"></div>
-            <div class="modal-body text-center py-4">
-              <!-- Download SVG icon from http://tabler.io/icons/icon/alert-triangle -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class="icon mb-2 text-danger icon-lg"
-              >
-                <path d="M12 9v4"></path>
-                <path
-                  d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z"
-                ></path>
-                <path d="M12 16h.01"></path>
-              </svg>
-              <h3 class="mb-1">Hapus Data</h3>
-              <div class="text-secondary">
-                Apakah kamu ingin menghapus data ini ?
-              </div>
-            </div>
-            <div class="modal-footer">
-              <div class="w-100">
-                <div class="row">
-                  <div class="col">
-                    <a href="#" class="btn btn-3 w-100" data-bs-dismiss="modal">
-                      Batal
-                    </a>
-                  </div>
-                  <div class="col">
-                    <a
-                      href="#"
-                      class="btn btn-danger btn-4 w-100"
-                      data-bs-dismiss="modal"
-                    >
-                      Hapus
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+      <div class="card-footer d-flex align-items-center justify-content-between">
+        <span class="text-secondary">
+          Halaman {{ page }}
+          <template v-if="pagination.total"> · {{ pagination.total }} pegawai </template>
+        </span>
+
+        <div class="btn-list">
+          <button class="btn btn-outline-secondary" :disabled="page <= 1 || loading" @click="changePage(page - 1)">Sebelumnya</button>
+
+          <button class="btn btn-outline-secondary" :disabled="loading || employees.length < 10 || (pagination.totalPages ? page >= pagination.totalPages : false)" @click="changePage(page + 1)">
+            Berikutnya
+          </button>
         </div>
       </div>
     </div>

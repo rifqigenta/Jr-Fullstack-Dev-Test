@@ -1,4 +1,3 @@
-// https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
   future: {
     compatibilityVersion: 4,
@@ -12,25 +11,26 @@ export default defineNuxtConfig({
     public: {
       appName: process.env.APP_NAME,
       appClient: process.env.APP_CLIENT,
-      recaptchaSiteKey: process.env.NUXT_PUBLIC_RECAPTCHA_SITE_KEY,
+      turnstileSiteKey: process.env.NUXT_PUBLIC_TURNSTILE_SITE_KEY,
     },
   },
 
-  css: [
-    "@tabler/core/dist/css/tabler.min.css",
-    // '@tabler/core/dist/css/tabler-icons.min.css',
-    // "~/assets/css/main.css",
-    "~/assets/css/backend.css",
-  ],
+  css: ["@tabler/core/dist/css/tabler.min.css", "~/assets/css/backend.css"],
 
   app: {
     head: {
       charset: "utf-8",
       viewport: "width=device-width, initial-scale=1",
-      link: [{ rel: "icon", type: "image/x-icon", href: "/favicon.png" }],
+      link: [
+        {
+          rel: "icon",
+          type: "image/x-icon",
+          href: "/favicon.png",
+        },
+      ],
       script: [
         {
-          src: "https://www.google.com/recaptcha/api.js",
+          src: "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
           async: true,
           defer: true,
         },
@@ -38,11 +38,13 @@ export default defineNuxtConfig({
     },
   },
 
-  plugins: [
-    "~/plugins/jquery.client.js",
-    "~/plugins/tabler.client.js",
-    "~/plugins/apexcharts.client.js",
-  ],
+  routeRules: {
+    "/api/**": {
+      proxy: `${process.env.API_BASE_URL || "http://localhost:3001"}/api/**`,
+    },
+  },
+
+  plugins: ["~/plugins/jquery.client.js", "~/plugins/tabler.client.js", "~/plugins/apexcharts.client.js"],
 
   vite: {
     optimizeDeps: {

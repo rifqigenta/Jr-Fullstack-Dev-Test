@@ -1,25 +1,98 @@
+<script setup>
+import { IconSearch } from "@tabler/icons-vue";
+
+definePageMeta({
+  title: "Manajemen Role",
+});
+
+useSeoMeta({
+  title: "Manajemen Role",
+});
+
+const { request } = useApi();
+
+const roles = ref([]);
+const loading = ref(false);
+const error = ref("");
+
+const selectedRole = ref("");
+const searchInput = ref("");
+const keyword = ref("");
+const currentPage = ref(1);
+const perPage = 10;
+
+const filteredRoles = computed(() => {
+  return roles.value.filter((role) => {
+    const matchesRole = !selectedRole.value || String(role.id) === String(selectedRole.value);
+
+    const matchesSearch = role.nama_role.toLowerCase().includes(keyword.value.toLowerCase());
+
+    return matchesRole && matchesSearch;
+  });
+});
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredRoles.value.length / perPage)));
+
+const paginatedRoles = computed(() => {
+  const start = (currentPage.value - 1) * perPage;
+  return filteredRoles.value.slice(start, start + perPage);
+});
+
+watch([selectedRole, keyword], () => {
+  currentPage.value = 1;
+});
+
+async function loadRoles() {
+  loading.value = true;
+  error.value = "";
+
+  try {
+    const response = await request("/roles");
+    roles.value = Array.isArray(response.data) ? response.data : [];
+  } catch (e) {
+    error.value = e?.data?.message || "Gagal mengambil data manajemen role.";
+  } finally {
+    loading.value = false;
+  }
+}
+
+function applySearch() {
+  keyword.value = searchInput.value.trim();
+}
+
+onMounted(loadRoles);
+</script>
+
 <template>
   <div class="card">
     <div class="card-header">
-      <div class="d-flex gap-2 ms-auto">
+      <div class="d-flex gap-2 ms-auto flex-wrap">
         <!-- Filter Role -->
-        <select name="" id="" class="form-select" style="width: 180px">
+        <select v-model="selectedRole" class="form-select" style="width: 180px">
           <option value="">Semua Role</option>
-          <option value="">Super Admin</option>
-          <option value="">Admin</option>
-          <option value="">Marketing</option>
-          <option value="">Finance</option>
+
+          <option v-for="role in roles" :key="role.id" :value="String(role.id)">
+            {{ role.nama_role }}
+          </option>
         </select>
 
         <!-- Search -->
-        <div class="input-group">
-          <input type="text" class="form-control" placeholder="Cari Data ..." />
-          <button class="btn" type="button">
-            <IconSearch stroke="{2}" />
+        <form class="input-group" style="width: 250px" @submit.prevent="applySearch">
+          <input v-model="searchInput" type="text" class="form-control" placeholder="Cari Data ..." />
+
+          <button class="btn" type="submit">
+            <IconSearch :stroke="2" />
           </button>
-        </div>
+        </form>
       </div>
     </div>
+
+    <div v-if="error" class="alert alert-danger m-3">
+      {{ error }}
+
+      <button class="btn btn-sm btn-outline-danger ms-2" @click="loadRoles">Coba Lagi</button>
+    </div>
+
     <div class="table-responsive card-body p-0">
       <table class="table table-vcenter">
         <thead>
@@ -30,64 +103,54 @@
             <th class="text-center">Aksi</th>
           </tr>
         </thead>
-        <tbody v-for="(item, index) in manajemenRole" :key="item.id">
-          <tr>
-            <td class="text-center">{{ index + 1 }}</td>
-            <td>{{ item.role }}</td>
-            <td>{{ item.deskripsi }}</td>
+
+        <tbody>
+          <tr v-if="loading">
+            <td colspan="4" class="text-center py-4">Memuat data role...</td>
+          </tr>
+
+          <tr v-for="(item, index) in paginatedRoles" :key="item.id">
             <td class="text-center">
-              <NuxtLink
-                :to="`role/hak-akses/${item.id}`"
-                class="btn btn-sm btn-primary"
-                >Hak Akses
-              </NuxtLink>
+              {{ (currentPage - 1) * perPage + index + 1 }}
             </td>
+
+            <td>{{ item.nama_role }}</td>
+
+            <td>
+              {{ item.deskripsi || "-" }}
+            </td>
+
+            <td class="text-center">
+              <NuxtLink :to="`/user/role/hak-akses/${item.id}`" class="btn btn-sm btn-primary"> Hak Akses </NuxtLink>
+            </td>
+          </tr>
+
+          <tr v-if="!loading && !error && paginatedRoles.length === 0">
+            <td colspan="4" class="text-center py-4">Tidak ada data role.</td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <!-- Pagination -->
     <div class="card-footer d-flex align-items-center">
+      <span class="text-secondary"> Total {{ filteredRoles.length }} role </span>
+
       <ul class="pagination ms-auto m-0">
-        <li class="page-item"><a class="page-link" href="#">1</a></li>
-        <li class="page-item active"><a class="page-link" href="#">2</a></li>
-        <li class="page-item"><a class="page-link" href="#">3</a></li>
-        <li class="page-item"><a class="page-link" href="#">4</a></li>
-        <li class="page-item"><a class="page-link" href="#">5</a></li>
-        <li class="page-item">
-          <a class="page-link" href="#">
-            next
-            <!-- Download SVG icon from http://tabler-icons.io/i/chevron-right -->
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              class="icon"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              stroke-width="2"
-              stroke="currentColor"
-              fill="none"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-              <path d="M9 6l6 6l-6 6"></path>
-            </svg>
-          </a>
+        <li class="page-item" :class="{ disabled: currentPage === 1 }">
+          <button type="button" class="page-link" :disabled="currentPage === 1" @click="currentPage--">Sebelumnya</button>
+        </li>
+
+        <li v-for="pageNumber in totalPages" :key="pageNumber" class="page-item" :class="{ active: currentPage === pageNumber }">
+          <button type="button" class="page-link" @click="currentPage = pageNumber">
+            {{ pageNumber }}
+          </button>
+        </li>
+
+        <li class="page-item" :class="{ disabled: currentPage === totalPages }">
+          <button type="button" class="page-link" :disabled="currentPage === totalPages" @click="currentPage++">Berikutnya</button>
         </li>
       </ul>
     </div>
   </div>
 </template>
-
-<script setup>
-definePageMeta({
-  title: "Manajemen Role",
-});
-
-useSeoMeta({
-  title: "Manajemen Role",
-});
-
-import { IconSearch } from "@tabler/icons-vue";
-import { manajemenRole } from "~/data/manajemen-role.js";
-</script>
