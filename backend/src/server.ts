@@ -10,7 +10,7 @@ async function bootstrap() {
     process.exit(1);
   }
 
-  const server = app.listen(env.PORT, () => {
+  const server = app.listen(env.PORT, "0.0.0.0", () => {
     console.log("");
     console.log("JMC Backend API started");
     console.log(`Environment : ${env.NODE_ENV}`);
