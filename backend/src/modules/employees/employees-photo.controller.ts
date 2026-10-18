@@ -16,6 +16,18 @@ function getEmployeeId(value: string | undefined): number | null {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
+function handlePhotoError(error: unknown, res: Response, next: NextFunction): void {
+  if (error instanceof EmployeeServiceError) {
+    res.status(error.statusCode).json({
+      success: false,
+      message: error.message,
+    });
+    return;
+  }
+
+  next(error);
+}
+
 export async function uploadPhoto(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   try {
     const id = getEmployeeId(typeof req.params.id === "string" ? req.params.id : undefined);
@@ -26,6 +38,13 @@ export async function uploadPhoto(req: AuthRequest, res: Response, next: NextFun
         message: "ID pegawai tidak valid.",
       });
       return;
+    }
+
+    if (!req.auth) {
+      res.status(401).json({
+        success: false,
+        message: "Silahkan login terlebih dahulu.",
+      });
     }
 
     if (!req.file) {
@@ -41,7 +60,7 @@ export async function uploadPhoto(req: AuthRequest, res: Response, next: NextFun
     if (!isValid) {
       res.status(400).json({
         success: false,
-        message: "Foto harus berformat JPEG, PNG, atau WebP.",
+        message: "Foto harus berformat JPEG, PNG, atau JPG.",
       });
       return;
     }
@@ -54,15 +73,7 @@ export async function uploadPhoto(req: AuthRequest, res: Response, next: NextFun
       data: result,
     });
   } catch (error) {
-    if (error instanceof EmployeeServiceError) {
-      res.status(error.statusCode).json({
-        success: false,
-        message: error.message,
-      });
-      return;
-    }
-
-    next(error);
+    handlePhotoError(error, res, next);
   }
 }
 
@@ -78,6 +89,14 @@ export async function deletePhoto(req: AuthRequest, res: Response, next: NextFun
       return;
     }
 
+    if (!req.auth) {
+      res.status(401).json({
+        success: false,
+        message: "Silakan login terlebih dahulu.",
+      });
+      return;
+    }
+
     const result = await removeEmployeePhoto(id, req.auth!.user.id);
 
     res.status(200).json({
@@ -86,26 +105,27 @@ export async function deletePhoto(req: AuthRequest, res: Response, next: NextFun
       data: result,
     });
   } catch (error) {
-    if (error instanceof EmployeeServiceError) {
-      res.status(error.statusCode).json({
-        success: false,
-        message: error.message,
-      });
-      return;
-    }
-
-    next(error);
+    handlePhotoError(error, res, next);
   }
 }
 
-/**
- * Error handler khusus Multer.
- */
 export function handlePhotoUploadError(error: unknown, _req: AuthRequest, res: Response, next: NextFunction): void {
   if (error instanceof multer.MulterError) {
+    let message = "Upload foto tidak valid.";
+
+    if (error.code === "LIMIT_FILE_SIZE") {
+      message = "Ukuran foto maksimal 2 MB.";
+    } else if (error.code === "LIMIT_UNEXPECTED_FILE") {
+      message = "Unggah satu foto menggunakan field photo.";
+    } else if (error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_PART_COUNT") {
+      message = "Hanya boleh mengunggah satu foto per request.";
+    } else if (error.code === "LIMIT_FIELD_COUNT") {
+      message = "Request upload hanya boleh berisi file foto.";
+    }
+
     res.status(400).json({
       success: false,
-      message: error.code === "LIMIT_FILE_SIZE" ? "Ukuran foto maksimal 2 MB." : "Upload foto tidak valid.",
+      message,
     });
     return;
   }

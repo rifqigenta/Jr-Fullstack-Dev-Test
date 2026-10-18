@@ -1,89 +1,95 @@
 <script setup>
+import SettingForm from "~/features/Tunjangan/components/SettingForm.vue";
+
+import { displayDate } from "~/utils/employeeDate.js";
+import { formatRupiah } from "~/utils/formatRupiah.js";
+
 definePageMeta({ title: "Pengaturan Tarif Transport" });
 
 const { request } = useApi();
+const { user, fetchMe } = useAuth();
 
 const settings = ref([]);
 const loading = ref(false);
 const saving = ref(false);
+
 const error = ref("");
 const message = ref("");
-const editingId = ref(null);
+const editing = ref(null);
+const formVersion = ref(0);
 
-const form = reactive({
-  base_fare: 2000,
-  berlaku_mulai: new Date().toISOString().slice(0, 10),
-  minimum_km: 5,
-  maximum_km: 25,
-});
+const allowed = computed(
+  () =>
+    String(user.value?.nama_role || "")
+      .trim()
+      .toLowerCase() === "admin hrd",
+);
 
-const rupiah = (value) =>
-  new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-    maximumFractionDigits: 0,
-  }).format(Number(value || 0));
+const busy = computed(() => loading.value || saving.value);
+
+function getError(value) {
+  const fields = value?.data?.errors?.fieldErrors;
+
+  return (fields ? Object.values(fields).flat().filter(Boolean).join(" ") : "") || value?.data?.message || value?.message || "Terjadi kesalahan.";
+}
 
 async function loadSettings() {
   loading.value = true;
-  error.value = "";
+
   try {
-    const res = await request("/transport/settings");
-    settings.value = res.data || [];
-  } catch (e) {
-    error.value = e?.data?.message || "Gagal mengambil tarif.";
+    const response = await request("/transport/settings");
+    settings.value = response.data || [];
+  } catch (value) {
+    error.value = getError(value);
   } finally {
     loading.value = false;
   }
 }
 
 function resetForm() {
-  editingId.value = null;
-  form.base_fare = 2000;
-  form.berlaku_mulai = new Date().toISOString().slice(0, 10);
-  form.minimum_km = 5;
-  form.maximum_km = 25;
+  editing.value = null;
+  formVersion.value++;
 }
 
-function editSetting(item) {
-  editingId.value = item.id;
-  form.base_fare = Number(item.base_fare);
-  form.berlaku_mulai = String(item.berlaku_mulai).slice(0, 10);
-  form.minimum_km = 5;
-  form.maximum_km = 25;
+function edit(item) {
+  if (busy.value) return;
+
+  error.value = "";
+  message.value = "";
+  editing.value = { ...item };
+  formVersion.value++;
 }
 
-async function saveSetting() {
+async function save(payload) {
+  if (busy.value || !allowed.value) return;
+
   saving.value = true;
   error.value = "";
   message.value = "";
 
   try {
-    const payload = {
-      base_fare: Number(form.base_fare),
-      berlaku_mulai: form.berlaku_mulai,
-      minimum_km: 5,
-      maximum_km: 25,
-    };
-
-    const res = await request(editingId.value ? `/transport/settings/${editingId.value}` : "/transport/settings", {
-      method: editingId.value ? "PATCH" : "POST",
+    const response = await request(editing.value ? `/transport/settings/${editing.value.id}` : "/transport/settings", {
+      method: editing.value ? "PATCH" : "POST",
       body: payload,
     });
 
-    message.value = res.message || "Tarif berhasil disimpan.";
+    message.value = response.message;
     resetForm();
+
     await loadSettings();
-  } catch (e) {
-    error.value = e?.data?.message || "Gagal menyimpan tarif.";
+  } catch (value) {
+    error.value = getError(value);
   } finally {
     saving.value = false;
   }
 }
 
-async function removeSetting(item) {
-  if (!confirm("Yakin ingin menghapus pengaturan tarif ini?")) return;
+async function remove(item) {
+  if (busy.value) return;
 
+  if (!window.confirm(`Hapus tarif yang berlaku mulai ${displayDate(item.berlaku_mulai)}?`)) return;
+
+  saving.value = true;
   error.value = "";
   message.value = "";
 
@@ -92,103 +98,102 @@ async function removeSetting(item) {
       method: "DELETE",
     });
 
+    if (editing.value?.id === item.id) resetForm();
+
     message.value = "Tarif berhasil dihapus.";
     await loadSettings();
-  } catch (e) {
-    error.value = e?.data?.message || "Gagal menghapus tarif.";
+  } catch (value) {
+    error.value = getError(value);
+  } finally {
+    saving.value = false;
   }
 }
 
-onMounted(loadSettings);
+onMounted(async () => {
+  try {
+    if (!user.value) await fetchMe();
+
+    if (!allowed.value) {
+      error.value = "Pengaturan tarif hanya dapat diakses Admin HRD.";
+      return;
+    }
+
+    await loadSettings();
+  } catch (value) {
+    error.value = getError(value);
+  }
+});
 </script>
 
 <template>
   <div>
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h2 class="invisible">Pengaturan Tarif Transport</h2>
+    <div class="d-flex justify-content-end mb-3">
       <NuxtLink to="/tunjangan/transport" class="btn"> Kembali </NuxtLink>
     </div>
 
-    <div v-if="error" class="alert alert-danger">{{ error }}</div>
-    <div v-if="message" class="alert alert-success">{{ message }}</div>
-
-    <div class="card mb-3">
-      <div class="card-header">
-        <h3 class="card-title">
-          {{ editingId ? "Edit Tarif" : "Tambah Tarif" }}
-        </h3>
-      </div>
-
-      <form @submit.prevent="saveSetting">
-        <div class="card-body">
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Tarif Dasar (Rp/km)</label>
-              <input v-model.number="form.base_fare" type="number" min="1" max="1000000" class="form-control" required />
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Berlaku Mulai</label>
-              <input v-model="form.berlaku_mulai" type="date" class="form-control" required />
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Minimum Jarak</label>
-              <input :value="5" class="form-control" disabled />
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Maksimum Jarak</label>
-              <input :value="25" class="form-control" disabled />
-            </div>
-          </div>
-        </div>
-
-        <div class="card-footer d-flex justify-content-end gap-2">
-          <button v-if="editingId" type="button" class="btn" @click="resetForm">Batal Edit</button>
-
-          <button type="submit" class="btn btn-primary" :disabled="saving">
-            {{ saving ? "Menyimpan..." : "Simpan Tarif" }}
-          </button>
-        </div>
-      </form>
+    <div v-if="error" class="alert alert-danger" role="alert">
+      {{ error }}
     </div>
 
-    <div class="card">
-      <div class="table-responsive">
-        <table class="table table-vcenter card-table">
-          <thead>
-            <tr>
-              <th>No</th>
-              <th>Tarif Dasar</th>
-              <th>Berlaku Mulai</th>
-              <th>Jarak</th>
-              <th>Aksi</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            <tr v-if="loading">
-              <td colspan="5" class="text-center">Memuat...</td>
-            </tr>
-
-            <tr v-for="(item, i) in settings" :key="item.id">
-              <td>{{ i + 1 }}</td>
-              <td>{{ rupiah(item.base_fare) }}/km</td>
-              <td>{{ item.berlaku_mulai }}</td>
-              <td>{{ item.minimum_km }}–{{ item.maximum_km }} km</td>
-              <td>
-                <button class="btn btn-sm btn-outline-primary me-2" @click="editSetting(item)">Edit</button>
-                <button class="btn btn-sm btn-outline-danger" @click="removeSetting(item)">Hapus</button>
-              </td>
-            </tr>
-
-            <tr v-if="!loading && settings.length === 0">
-              <td colspan="5" class="text-center">Belum ada pengaturan tarif.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+    <div v-if="message" class="alert alert-success" role="status">
+      {{ message }}
     </div>
+
+    <template v-if="allowed">
+      <div class="card mb-3">
+        <div class="card-header">
+          <h3 class="card-title">
+            {{ editing ? "Edit Tarif" : "Tambah Tarif" }}
+          </h3>
+        </div>
+
+        <SettingForm :key="formVersion" :setting="editing" :disabled="busy" @submit="save" @cancel="resetForm" />
+      </div>
+
+      <div class="card">
+        <div class="table-responsive">
+          <table class="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>Tarif Dasar</th>
+                <th>Berlaku Mulai</th>
+                <th>Minimum Km</th>
+                <th>Maksimum Km</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              <tr v-if="loading">
+                <td colspan="6" class="text-center py-4">Memuat pengaturan...</td>
+              </tr>
+
+              <template v-else>
+                <tr v-for="(item, index) in settings" :key="item.id">
+                  <td>{{ index + 1 }}</td>
+                  <td>{{ formatRupiah(item.base_fare) }} / km</td>
+                  <td>{{ displayDate(item.berlaku_mulai) }}</td>
+                  <td>{{ item.minimum_km }}</td>
+                  <td>{{ item.maximum_km }}</td>
+
+                  <td>
+                    <div class="d-flex gap-2">
+                      <button type="button" class="btn btn-sm" :disabled="busy" @click="edit(item)">Edit</button>
+
+                      <button type="button" class="btn btn-sm btn-outline-danger" :disabled="busy" @click="remove(item)">Hapus</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr v-if="!settings.length">
+                  <td colspan="6" class="text-center py-4">Belum ada tarif.</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
   </div>
 </template>

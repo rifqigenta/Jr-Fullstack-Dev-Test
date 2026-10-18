@@ -1,13 +1,17 @@
 import { fileTypeFromBuffer } from "file-type";
 
-const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 
 export async function validateImageBuffer(buffer: Buffer): Promise<boolean> {
-  const detected = await fileTypeFromBuffer(buffer);
-
-  if (!detected) {
+  if (buffer.length === 0) {
     return false;
   }
 
-  return ALLOWED_MIME_TYPES.has(detected.mime);
+  try {
+    const detected = await fileTypeFromBuffer(buffer);
+
+    return detected !== undefined && ALLOWED_MIME_TYPES.has(detected.mime);
+  } catch (error) {
+    return false;
+  }
 }

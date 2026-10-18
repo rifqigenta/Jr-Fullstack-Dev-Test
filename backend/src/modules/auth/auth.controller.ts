@@ -2,25 +2,38 @@ import type { Request, Response, NextFunction } from "express";
 
 import { z } from "zod";
 
+import { pool } from "../../config/database.js";
+
 import type { AuthRequest } from "../../middlewares/auth.middleware.js";
 
-import { AuthError, COOKIE_NAME, TOKEN_TTL, loginUser, logoutUser } from "./auth.service.js";
+import { AuthError, COOKIE_NAME, IDLE_TIMEOUT_MS, TOKEN_TTL, cookieOptions, loginUser, logoutUser } from "./auth.service.js";
 
-import { verifyCaptcha } from "./captcha.service.js";
+import { createCaptcha, verifyCaptcha } from "./captcha.service.js";
 
-const loginSchema = z.object({
-  identifier: z.string().trim().min(1).max(255),
-  password: z.string().min(1),
-  rememberMe: z.boolean().default(false),
-  captchaToken: z.string().min(1).max(2048),
-});
+const loginSchema = z
+  .object({
+    identifier: z.string().trim().min(1).max(255),
+    password: z.string().min(1).max(256),
+    rememberMe: z.boolean().default(false),
+    captchaId: z.uuid(),
+    captchaAnswer: z.string().regex(/^\d{6}$/),
+  })
+  .strict();
 
-const cookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax" as const,
-  path: "/",
-};
+export async function captcha(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const challenge = await createCaptcha();
+
+    res.setHeader("Cache-Control", "no-store");
+
+    res.status(200).json({
+      success: true,
+      data: challenge,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
 
 export async function login(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -29,42 +42,41 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
     if (!parsed.success) {
       res.status(400).json({
         success: false,
-        message: "Input login tidak valid.",
+        message: "Lengkapi kredensial dan 6 digit kode CAPTCHA.",
         errors: z.flattenError(parsed.error),
       });
       return;
     }
 
-    const { identifier, password, rememberMe } = parsed.data;
+    const { identifier, password, rememberMe, captchaId, captchaAnswer } = parsed.data;
 
-    const captchaValid = await verifyCaptcha(parsed.data.captchaToken, req.ip);
+    const valid = await verifyCaptcha(captchaId, captchaAnswer);
 
-    if (!captchaValid) {
+    if (!valid) {
       res.status(400).json({
         success: false,
-        message: "Verifikasi CAPTCHA gagal. Silakan coba lagi.",
+        message: "CAPTCHA salah, sudah dipakai, atau kedaluwarsa.",
       });
       return;
     }
 
     const result = await loginUser(identifier, password, rememberMe);
 
-    const isProduction = process.env.NODE_ENV === "production";
-
     res.cookie(COOKIE_NAME, result.token, {
       ...cookieOptions,
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: "lax",
-      maxAge: rememberMe ? TOKEN_TTL.remembered : TOKEN_TTL.normal,
+      ...(rememberMe ? { maxAge: TOKEN_TTL.remembered } : {}),
     });
 
-    res.json({
+    res.setHeader("Cache-Control", "no-store");
+
+    res.status(200).json({
       success: true,
       message: "Login berhasil.",
       data: {
         user: result.user,
         rememberMe,
+        lastActivityAt: Date.now(),
+        idleTimeoutMs: IDLE_TIMEOUT_MS,
       },
     });
   } catch (error) {
@@ -81,23 +93,65 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
 }
 
 export async function me(req: AuthRequest, res: Response): Promise<void> {
-  res.json({
+  res.status(200).json({
     success: true,
     data: {
       user: req.auth!.user,
+      rememberMe: req.auth!.rememberMe,
+      lastActivityAt: req.auth!.lastActivityAt,
+      idleTimeoutMs: IDLE_TIMEOUT_MS,
     },
   });
 }
 
-export async function logout(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+export async function activity(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   try {
     const auth = req.auth!;
 
-    await logoutUser(auth.sessionId, auth.user.id);
+    const result = await pool.query(
+      `
+        UPDATE auth_sessions
+        SET last_activity_at = UTC_TIMESTAMP(3)
+        WHERE id = ?
+          AND id_user = ?
+          AND revoked_at IS NULL
+          AND (
+            remember_me = 1
+            OR last_activity_at > DATE_SUB(
+              UTC_TIMESTAMP(3),
+              INTERVAL ? MICROSECOND
+            )
+          )
+      `,
+      [auth.sessionId, auth.user.id, IDLE_TIMEOUT_MS * 1000],
+    );
+
+    if (Number(result.affectedRows) === 0) {
+      res.status(401).json({
+        success: false,
+        message: "Sesi sudah berakhir. Silakan login kembali.",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        lastActivityAt: Date.now(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function logout(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await logoutUser(req.auth!.sessionId, req.auth!.user.id);
 
     res.clearCookie(COOKIE_NAME, cookieOptions);
 
-    res.json({
+    res.status(200).json({
       success: true,
       message: "Logout berhasil.",
     });

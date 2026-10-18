@@ -9,5 +9,6 @@ export const uploadEmployeePhoto = multer({
     fileSize: MAX_FILE_SIZE,
     files: 1,
     fields: 0,
+    parts: 1,
   },
 }).single("photo");

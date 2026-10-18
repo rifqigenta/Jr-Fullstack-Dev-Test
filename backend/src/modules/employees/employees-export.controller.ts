@@ -8,23 +8,21 @@ import type { AuthRequest } from "../../middlewares/auth.middleware.js";
 
 import { EmployeeServiceError } from "./employees.service.js";
 
-import { employeeExportQuerySchema } from "./employees-bulk.schema.js";
+import { employeeExportQuerySchema, jakartaToday } from "./employees-query.js";
 
 import { getEmployeesForExport, type ExportEmployeeRow } from "./employees-export.service.js";
 
 function safeCell(value: string | null): string {
   if (!value) return "-";
 
-  // Cegah input teks dieksekusi sebagai formula spreadsheet.
-  return /^[\s]*[=+\-@]/.test(value) ? `'${value}` : value;
+  return /^\s*[=+\-@]/.test(value) ? `'${value}` : value;
 }
 
 function formatDate(value: Date | string): string {
-  if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
-  }
+  const text = value instanceof Date ? [value.getFullYear(), String(value.getMonth() + 1).padStart(2, "0"), String(value.getDate()).padStart(2, "0")].join("-") : String(value).slice(0, 10);
 
-  return String(value).slice(0, 10);
+  const [year, month, day] = text.split("-");
+  return `${day}/${month}/${year}`;
 }
 
 function validateQuery(req: AuthRequest, res: Response) {
@@ -36,14 +34,13 @@ function validateQuery(req: AuthRequest, res: Response) {
       message: "Filter export tidak valid.",
       errors: z.flattenError(parsed.error),
     });
-
     return null;
   }
 
   return parsed.data;
 }
 
-function handleExportError(error: unknown, res: Response, next: NextFunction): void {
+function handleError(error: unknown, res: Response, next: NextFunction): void {
   if (error instanceof EmployeeServiceError) {
     res.status(error.statusCode).json({
       success: false,
@@ -61,30 +58,32 @@ export async function exportEmployeesExcel(req: AuthRequest, res: Response, next
     if (!query) return;
 
     const employees = await getEmployeesForExport(query);
-
     const workbook = new ExcelJS.Workbook();
 
     workbook.creator = "JMC Kepegawaian";
 
-    const worksheet = workbook.addWorksheet("Data Pegawai");
+    const sheet = workbook.addWorksheet("Data Pegawai");
 
-    worksheet.columns = [
-      { header: "NIP", key: "nip", width: 18 },
-      { header: "Nama Pegawai", key: "nama", width: 28 },
+    sheet.columns = [
+      { header: "No", key: "no", width: 8 },
+      { header: "NIP", key: "nip", width: 22 },
+      { header: "Nama Pegawai", key: "nama", width: 30 },
       { header: "Email", key: "email", width: 32 },
-      { header: "Nomor HP", key: "phone", width: 20 },
-      { header: "Jabatan", key: "jabatan", width: 24 },
-      { header: "Departemen", key: "departemen", width: 24 },
+      { header: "Nomor HP", key: "phone", width: 22 },
+      { header: "Jabatan", key: "jabatan", width: 22 },
+      { header: "Departemen", key: "departemen", width: 22 },
       { header: "Kecamatan", key: "kecamatan", width: 24 },
       { header: "Kabupaten", key: "kabupaten", width: 24 },
       { header: "Provinsi", key: "provinsi", width: 24 },
       { header: "Tanggal Masuk", key: "tanggal", width: 18 },
-      { header: "Status", key: "status", width: 15 },
+      { header: "Masa Kerja (Tahun)", key: "masa", width: 20 },
+      { header: "Status", key: "status", width: 16 },
       { header: "Status Kontrak", key: "kontrak", width: 18 },
     ];
 
-    for (const employee of employees) {
-      worksheet.addRow({
+    employees.forEach((employee, index) => {
+      sheet.addRow({
+        no: index + 1,
         nip: safeCell(employee.nip),
         nama: safeCell(employee.nama_pegawai),
         email: safeCell(employee.email),
@@ -95,12 +94,13 @@ export async function exportEmployeesExcel(req: AuthRequest, res: Response, next
         kabupaten: safeCell(employee.kabupaten),
         provinsi: safeCell(employee.provinsi),
         tanggal: formatDate(employee.tanggal_masuk),
-        status: employee.status,
-        kontrak: employee.status_kontrak ?? "-",
+        masa: employee.masa_kerja,
+        status: safeCell(employee.status),
+        kontrak: safeCell(employee.status_kontrak),
       });
-    }
+    });
 
-    const header = worksheet.getRow(1);
+    const header = sheet.getRow(1);
 
     header.font = {
       bold: true,
@@ -115,16 +115,17 @@ export async function exportEmployeesExcel(req: AuthRequest, res: Response, next
 
     header.alignment = {
       vertical: "middle",
+      wrapText: true,
     };
 
-    header.height = 24;
+    header.height = 30;
 
-    worksheet.autoFilter = {
+    sheet.autoFilter = {
       from: "A1",
-      to: "L1",
+      to: "N1",
     };
 
-    worksheet.views = [{ state: "frozen", ySplit: 1 }];
+    sheet.views = [{ state: "frozen", ySplit: 1 }];
 
     const buffer = await workbook.xlsx.writeBuffer();
 
@@ -133,10 +134,9 @@ export async function exportEmployeesExcel(req: AuthRequest, res: Response, next
     res.setHeader("Content-Disposition", 'attachment; filename="data-pegawai.xlsx"');
 
     res.setHeader("Cache-Control", "no-store");
-
     res.status(200).send(Buffer.from(buffer));
   } catch (error) {
-    handleExportError(error, res, next);
+    handleError(error, res, next);
   }
 }
 
@@ -150,91 +150,109 @@ function createPdfBuffer(employees: ExportEmployeeRow[]): Promise<Buffer> {
 
     const chunks: Buffer[] = [];
 
-    doc.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-
-    doc.on("end", () => {
-      resolve(Buffer.concat(chunks));
-    });
-
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    doc.fontSize(16).font("Helvetica-Bold");
-    doc.text("Laporan Data Pegawai JMC");
+    try {
+      doc.font("Helvetica-Bold").fontSize(16);
+      doc.text("Laporan Data Pegawai");
 
-    doc.moveDown(0.4);
+      doc.moveDown(0.4);
+      doc.font("Helvetica").fontSize(9);
+      doc.text(`Total pegawai: ${employees.length}`);
+      doc.text(`Tanggal export: ${formatDate(jakartaToday())}`);
+      doc.moveDown();
 
-    doc.fontSize(9).font("Helvetica");
-    doc.text(`Total pegawai: ${employees.length}`);
-    doc.text(`Tanggal export: ${new Date().toISOString().slice(0, 10)}`);
-
-    doc.moveDown();
-
-    const columns = [
-      { title: "NIP", x: 35, width: 85 },
-      { title: "Nama", x: 125, width: 155 },
-      { title: "Jabatan", x: 285, width: 125 },
-      { title: "Departemen", x: 415, width: 125 },
-      { title: "Masuk", x: 545, width: 85 },
-      { title: "Kontrak", x: 635, width: 80 },
-      { title: "Status", x: 720, width: 75 },
-    ];
-
-    const rowHeight = 24;
-    const pageBottom = doc.page.height - 45;
-
-    function drawHeader(y: number): number {
-      doc.font("Helvetica-Bold").fontSize(8);
-
-      for (const column of columns) {
-        doc.text(column.title, column.x, y, {
-          width: column.width,
-          lineBreak: false,
-        });
-      }
-
-      doc
-        .moveTo(35, y + 17)
-        .lineTo(800, y + 17)
-        .stroke();
-
-      return y + 24;
-    }
-
-    let y = drawHeader(doc.y);
-
-    for (const employee of employees) {
-      if (y + rowHeight > pageBottom) {
-        doc.addPage();
-        y = drawHeader(40);
-      }
-
-      const values = [
-        employee.nip,
-        employee.nama_pegawai,
-        employee.nama_jabatan ?? "-",
-        employee.nama_departemen ?? "-",
-        formatDate(employee.tanggal_masuk),
-        employee.status_kontrak ?? "-",
-        employee.status,
+      const columns = [
+        { title: "No", width: 30 },
+        { title: "NIP", width: 105 },
+        { title: "Nama", width: 170 },
+        { title: "Jabatan", width: 110 },
+        { title: "Tanggal Masuk", width: 90 },
+        { title: "Masa Kerja", width: 80 },
+        { title: "Kontrak", width: 75 },
+        { title: "Status", width: 70 },
       ];
 
-      doc.font("Helvetica").fontSize(8);
+      const contentWidth = doc.page.width - 70;
+      const bottom = doc.page.height - 40;
 
-      columns.forEach((column, index) => {
-        doc.text(values[index] ?? "-", column.x, y, {
-          width: column.width - 5,
-          height: rowHeight - 4,
-          ellipsis: true,
-          lineBreak: false,
+      function header(y: number): number {
+        let x = 35;
+
+        doc.font("Helvetica-Bold").fontSize(8);
+
+        for (const column of columns) {
+          doc.text(column.title, x, y, {
+            width: column.width - 5,
+            lineBreak: false,
+          });
+          x += column.width;
+        }
+
+        doc
+          .moveTo(35, y + 16)
+          .lineTo(35 + contentWidth, y + 16)
+          .stroke();
+
+        return y + 24;
+      }
+
+      let y = header(doc.y);
+
+      employees.forEach((employee, index) => {
+        const values = [
+          String(index + 1),
+          employee.nip,
+          employee.nama_pegawai,
+          employee.nama_jabatan || "-",
+          formatDate(employee.tanggal_masuk),
+          `${employee.masa_kerja} tahun`,
+          employee.status_kontrak || "-",
+          employee.status,
+        ];
+
+        doc.font("Helvetica").fontSize(8);
+
+        const rowHeight = Math.max(
+          24,
+          ...values.map(
+            (value, columnIndex) =>
+              doc.heightOfString(value, {
+                width: columns[columnIndex]!.width - 8,
+              }) + 10,
+          ),
+        );
+
+        if (y + rowHeight > bottom) {
+          doc.addPage();
+          y = header(40);
+          doc.font("Helvetica").fontSize(8);
+        }
+
+        let x = 35;
+
+        columns.forEach((column, columnIndex) => {
+          doc.text(values[columnIndex] || "-", x, y, {
+            width: column.width - 8,
+          });
+          x += column.width;
         });
+
+        y += rowHeight;
       });
 
-      y += rowHeight;
-    }
+      if (!employees.length) {
+        doc.font("Helvetica").fontSize(10);
+        doc.text("Tidak ada data sesuai filter.", 35, y);
+      }
 
-    doc.end();
+      doc.end();
+    } catch (error) {
+      doc.destroy();
+      reject(error);
+    }
   });
 }
 
@@ -245,8 +263,6 @@ export async function exportEmployeesPdf(req: AuthRequest, res: Response, next: 
 
     const employees = await getEmployeesForExport(query);
 
-    // PDFKit kita gunakan dengan buffer in-memory.
-    // Batasi jumlah baris agar konsumsi memori tetap terkendali.
     if (employees.length > 1000) {
       res.status(400).json({
         success: false,
@@ -258,13 +274,11 @@ export async function exportEmployeesPdf(req: AuthRequest, res: Response, next: 
     const buffer = await createPdfBuffer(employees);
 
     res.setHeader("Content-Type", "application/pdf");
-
     res.setHeader("Content-Disposition", 'attachment; filename="data-pegawai.pdf"');
-
     res.setHeader("Cache-Control", "no-store");
 
     res.status(200).send(buffer);
   } catch (error) {
-    handleExportError(error, res, next);
+    handleError(error, res, next);
   }
 }

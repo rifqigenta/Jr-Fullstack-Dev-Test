@@ -8,21 +8,24 @@ export type TransportCalculationInput = {
 export function calculateTransportAmount(input: TransportCalculationInput) {
   const { distanceKm, attendanceDays, baseFare, contractStatus } = input;
 
-  if (!Number.isFinite(distanceKm) || !Number.isFinite(attendanceDays) || !Number.isFinite(baseFare) || distanceKm < 0 || attendanceDays < 0 || baseFare < 0) {
+  if (
+    !Number.isFinite(distanceKm) ||
+    distanceKm < 0 ||
+    !Number.isInteger(attendanceDays) ||
+    attendanceDays < 0 ||
+    attendanceDays > 31 ||
+    !Number.isFinite(baseFare) ||
+    baseFare < 0 ||
+    baseFare > 1_000_000
+  ) {
     throw new Error("Nilai perhitungan transport tidak valid.");
   }
 
-  const roundedDistance = Math.floor(Math.min(distanceKm, 25) + 0.5);
+  const countedDistance = distanceKm > 5 ? Math.min(25, Math.floor(distanceKm + 0.5)) : 0;
 
-  const eligibleDistance = distanceKm > 5;
+  const eligible = contractStatus === "PKWTT" && attendanceDays >= 19 && countedDistance > 0;
 
-  const eligibleAttendance = contractStatus !== "PKWTT" || attendanceDays >= 19;
-
-  const eligibleContract = ["PKWTT", "PKWT", "Magang"].includes(contractStatus ?? "");
-
-  const countedDistance = eligibleDistance ? roundedDistance : 0;
-
-  const nominal = eligibleDistance && eligibleAttendance && eligibleContract ? Math.round(baseFare * countedDistance * attendanceDays * 100) / 100 : 0;
+  const nominal = eligible ? Math.round(baseFare * countedDistance * attendanceDays * 100) / 100 : 0;
 
   return {
     jarak_asli_km: distanceKm,

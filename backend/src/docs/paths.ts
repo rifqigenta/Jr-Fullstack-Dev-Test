@@ -1,3 +1,5 @@
+import { transportPaths, authPaths } from "./transport.openapi.js";
+
 type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
 type Endpoint = {
@@ -173,5 +175,9 @@ export function buildPaths(): Record<string, Record<string, unknown>> {
     };
   }
 
-  return paths;
+  return {
+    ...paths,
+    ...transportPaths,
+    ...authPaths,
+  };
 }

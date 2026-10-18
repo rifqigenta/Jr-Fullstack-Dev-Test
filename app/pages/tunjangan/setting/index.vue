@@ -1,18 +1,17 @@
-<template>
-  <div class="row">
-    <div class="col-md-6">
-      <SettingFrom />
-    </div>
-  </div>
-</template>
-
 <script setup>
 definePageMeta({
-  title: "Setting Tunjangan Transport",
-});
+  title: "Pengaturan Tarif Transport",
 
-await navigateTo("/tunjangan/transport/settings", {
-  redirectCode: 302,
-  replace: true,
+  middleware: [
+    () =>
+      navigateTo("/tunjangan/transport/settings", {
+        replace: true,
+        redirectCode: 302,
+      }),
+  ],
 });
 </script>
+
+<template>
+  <div />
+</template>

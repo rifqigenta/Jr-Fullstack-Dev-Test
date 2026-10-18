@@ -1,7 +1,33 @@
 export function useAuth() {
   const user = useState("auth-user", () => null);
+  const rememberMe = useState("auth-remember-me", () => false);
+  const lastActivityAt = useState("auth-last-activity", () => 0);
 
   const { request, csrf } = useApi();
+
+  function syncSession(data) {
+    user.value = data.user;
+    rememberMe.value = Boolean(data.rememberMe);
+    lastActivityAt.value = Number(data.lastActivityAt || Date.now());
+
+    if (import.meta.client) {
+      sessionStorage.setItem("jmc-remember-me", String(rememberMe.value));
+
+      sessionStorage.setItem("jmc-last-activity", String(lastActivityAt.value));
+    }
+  }
+
+  function clearSession() {
+    user.value = null;
+    rememberMe.value = false;
+    lastActivityAt.value = 0;
+    csrf.value = null;
+
+    if (import.meta.client) {
+      sessionStorage.removeItem("jmc-remember-me");
+      sessionStorage.removeItem("jmc-last-activity");
+    }
+  }
 
   async function login(payload) {
     const response = await request("/auth/login", {
@@ -9,24 +35,37 @@ export function useAuth() {
       body: payload,
     });
 
-    user.value = response.data.user;
     csrf.value = null;
-
-    if (import.meta.client) {
-      sessionStorage.setItem("jmc-remember-me", String(Boolean(response.data.rememberMe)));
-
-      sessionStorage.setItem("jmc-last-activity", String(Date.now()));
-    }
+    syncSession(response.data);
 
     return response;
   }
 
   async function fetchMe() {
-    const response = await request("/auth/me");
+    try {
+      const response = await request("/auth/me");
 
-    user.value = response.data.user;
+      syncSession(response.data);
+      return user.value;
+    } catch (error) {
+      const status = error?.statusCode || error?.status;
 
-    return user.value;
+      if (status === 401) {
+        clearSession();
+      }
+
+      throw error;
+    }
+  }
+
+  async function reportActivity() {
+    const response = await request("/auth/activity", {
+      method: "POST",
+    });
+
+    lastActivityAt.value = Number(response.data.lastActivityAt);
+
+    return response;
   }
 
   async function logout() {
@@ -35,24 +74,25 @@ export function useAuth() {
         method: "POST",
       });
     } catch (error) {
-      console.warn("Logout request failed:", error);
-    } finally {
-      user.value = null;
-      csrf.value = null;
+      const status = error?.statusCode || error?.status;
 
-      if (import.meta.client) {
-        sessionStorage.removeItem("jmc-remember-me");
-        sessionStorage.removeItem("jmc-last-activity");
+      if (status !== 401) {
+        throw error;
       }
-
-      await navigateTo("/Login");
     }
+
+    clearSession();
+    await navigateTo("/Login");
   }
 
   return {
     user,
+    rememberMe,
+    lastActivityAt,
     login,
     fetchMe,
+    reportActivity,
+    clearSession,
     logout,
   };
 }

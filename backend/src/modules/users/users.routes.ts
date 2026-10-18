@@ -4,13 +4,17 @@ import { requireAuth } from "../../middlewares/auth.middleware.js";
 
 import { requirePermission } from "../../middlewares/permission.middleware.js";
 
-import { listUsers, detailUser, employeeOptions, storeUser, patchUser, patchUserStatus, destroyUser } from "./users.controller.js";
+import { listUsers, detailUser, employeeOptions, checkUsername, generateUserPassword, storeUser, patchUser, patchUserStatus, destroyUser } from "./users.controller.js";
 
 const router = Router();
 
 router.use(requireAuth);
 
 router.get("/employee-options", requirePermission("users", "read"), employeeOptions);
+
+router.get("/username-availability", requirePermission("users", "read"), checkUsername);
+
+router.post("/generate-password", requirePermission("users", "create"), generateUserPassword);
 
 router.get("/", requirePermission("users", "read"), listUsers);
 

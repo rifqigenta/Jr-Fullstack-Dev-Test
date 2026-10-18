@@ -1,68 +1,172 @@
-export default defineNuxtPlugin(() => {
-  const { user, logout } = useAuth();
+export default defineNuxtPlugin((nuxtApp) => {
+  const { user, rememberMe, lastActivityAt, fetchMe, reportActivity, clearSession, logout } = useAuth();
 
   const TIMEOUT = 3 * 60 * 1000;
-  const CHECK_INTERVAL = 1000;
+  const REPORT_INTERVAL = 10 * 1000;
+  const VERIFY_INTERVAL = 60 * 1000;
 
-  let loggingOut = false;
-  let lastEventAt = 0;
+  let localActivityAt = 0;
+  let lastReportAt = 0;
+  let lastVerifyAt = 0;
 
-  function isRemembered() {
-    return sessionStorage.getItem("jmc-remember-me") === "true";
+  let pendingActivity = false;
+  let reporting = false;
+  let checking = false;
+  let endingSession = false;
+
+  async function goToLogin() {
+    clearSession();
+    await navigateTo("/Login");
   }
 
-  function getLastActivity() {
-    return Number(sessionStorage.getItem("jmc-last-activity") || 0);
+  async function handleUnauthorized(error) {
+    const status = error?.statusCode || error?.status;
+
+    if (status === 401) {
+      await goToLogin();
+      return true;
+    }
+
+    return false;
   }
 
-  function updateActivity() {
-    if (!user.value || isRemembered() || loggingOut) return;
+  async function flushActivity() {
+    if (!user.value || rememberMe.value || !pendingActivity || reporting || endingSession) {
+      return;
+    }
+
+    reporting = true;
+    pendingActivity = false;
+
+    try {
+      await reportActivity();
+      lastReportAt = Date.now();
+    } catch (error) {
+      if (!(await handleUnauthorized(error))) {
+        pendingActivity = true;
+      }
+    } finally {
+      reporting = false;
+    }
+  }
+
+  function markActivity(event) {
+    if (!event.isTrusted || !user.value || rememberMe.value || endingSession) {
+      return;
+    }
+
+    const now = Date.now();
+    const last = localActivityAt || lastActivityAt.value;
+
+    if (last && now - last >= TIMEOUT) {
+      return;
+    }
+
+    localActivityAt = now;
+    pendingActivity = true;
+
+    if (now - lastReportAt >= REPORT_INTERVAL) {
+      void flushActivity();
+    }
+  }
+
+  async function verifySession() {
+    if (!user.value || checking || endingSession) return;
+
+    checking = true;
+    lastVerifyAt = Date.now();
+
+    try {
+      await fetchMe();
+    } catch (error) {
+      await handleUnauthorized(error);
+    } finally {
+      checking = false;
+    }
+  }
+
+  async function tick() {
+    if (!user.value || endingSession) return;
 
     const now = Date.now();
 
-    // Hindari menulis storage terus-menerus.
-    if (now - lastEventAt < 1000) return;
+    if (!rememberMe.value) {
+      const last = localActivityAt || lastActivityAt.value;
 
-    lastEventAt = now;
+      if (last && now - last >= TIMEOUT) {
+        endingSession = true;
 
-    // Jangan hidupkan kembali sesi yang sudah melewati timeout.
-    const last = getLastActivity();
-    if (last && now - last >= TIMEOUT) return;
+        try {
+          await logout();
+        } catch (error) {
+          console.warn("Logout idle belum terkonfirmasi:", error);
+          await goToLogin();
+        } finally {
+          endingSession = false;
+        }
 
-    sessionStorage.setItem("jmc-last-activity", String(now));
-  }
+        return;
+      }
 
-  async function checkSession() {
-    if (!user.value || isRemembered() || loggingOut) return;
-
-    let last = getLastActivity();
-
-    if (!last) {
-      last = Date.now();
-      sessionStorage.setItem("jmc-last-activity", String(last));
-    }
-
-    if (Date.now() - last >= TIMEOUT) {
-      loggingOut = true;
-
-      try {
-        await logout();
-      } finally {
-        loggingOut = false;
+      if (pendingActivity && now - lastReportAt >= REPORT_INTERVAL) {
+        void flushActivity();
       }
     }
+
+    if (now - lastVerifyAt >= VERIFY_INTERVAL) {
+      void verifySession();
+    }
   }
 
-  const events = ["pointerdown", "keydown", "scroll", "touchstart"];
+  const stopWatch = watch(
+    () => user.value?.id,
+    (id) => {
+      localActivityAt = id ? lastActivityAt.value : 0;
+      lastReportAt = 0;
+      lastVerifyAt = Date.now();
+      pendingActivity = false;
+    },
+    { immediate: true },
+  );
+
+  const events = ["pointerdown", "keydown", "scroll", "touchstart", "input"];
 
   events.forEach((event) => {
-    window.addEventListener(event, updateActivity, {
+    window.addEventListener(event, markActivity, {
       passive: true,
+      capture: true,
     });
   });
 
-  window.addEventListener("focus", checkSession);
-  document.addEventListener("visibilitychange", checkSession);
+  function onVisibilityChange() {
+    if (document.visibilityState === "visible") {
+      void tick();
+      void verifySession();
+    }
+  }
 
-  setInterval(checkSession, CHECK_INTERVAL);
+  function onFocus() {
+    void tick();
+    void verifySession();
+  }
+
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+
+  const interval = window.setInterval(() => {
+    void tick();
+  }, 1000);
+
+  nuxtApp.hook("app:beforeUnmount", () => {
+    stopWatch();
+    window.clearInterval(interval);
+
+    events.forEach((event) => {
+      window.removeEventListener(event, markActivity, true);
+    });
+
+    window.removeEventListener("focus", onFocus);
+
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+  });
 });

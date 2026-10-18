@@ -140,8 +140,6 @@ export async function saveEmployeePhoto(employeeId: number, buffer: Buffer, acto
     await connection.commit();
     committed = true;
 
-    // Hapus foto lama setelah database berhasil commit.
-    // Jika cleanup gagal, URL baru tetap aman tersimpan.
     try {
       await deleteCloudinaryPhoto(oldPhotoUrl);
     } catch (error) {
@@ -156,8 +154,6 @@ export async function saveEmployeePhoto(employeeId: number, buffer: Buffer, acto
     if (!committed) {
       await connection.rollback();
 
-      // Jika upload berhasil tetapi transaksi DB gagal,
-      // bersihkan foto baru agar tidak menjadi orphan.
       if (newPhoto) {
         try {
           await cloudinary.uploader.destroy(newPhoto.public_id);

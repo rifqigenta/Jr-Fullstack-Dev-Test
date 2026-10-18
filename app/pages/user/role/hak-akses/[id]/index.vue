@@ -1,89 +1,103 @@
 <script setup>
-import { IconCircleCheckFilled, IconXboxXFilled } from "@tabler/icons-vue";
-
-definePageMeta({
-  title: "Hak Akses",
-});
-
-useSeoMeta({
-  title: "Hak Akses",
-});
+definePageMeta({ title: "Hak Akses" });
 
 const route = useRoute();
 const { request } = useApi();
 
 const role = ref(null);
-const loading = ref(false);
+const loading = ref(true);
 const error = ref("");
+const ascending = ref(true);
 
-const roleId = computed(() => route.params.id);
+let version = 0;
 
-const hakAkses = computed(() => {
-  return role.value?.permissions || [];
+const permissions = computed(() => {
+  const rows = [...(role.value?.permissions || [])];
+
+  return rows.sort((a, b) => {
+    const result = String(a.modul_fitur).localeCompare(String(b.modul_fitur), "id");
+
+    return ascending.value ? result : -result;
+  });
 });
 
-async function loadPermissions() {
+const description = computed(() => {
+  if (role.value?.deskripsi) return role.value.deskripsi;
+
+  const modules = (role.value?.permissions || []).filter((item) => item.akses).map((item) => item.modul_fitur);
+
+  return modules.length ? `Memiliki akses ke: ${modules.join(", ")}.` : "Tidak memiliki akses modul.";
+});
+
+async function load() {
+  const requestVersion = ++version;
+
   loading.value = true;
   error.value = "";
   role.value = null;
 
   try {
-    const response = await request(`/roles/${roleId.value}/permissions`);
+    const response = await request(`/roles/${route.params.id}/permissions`);
 
+    if (requestVersion !== version) return;
     role.value = response.data;
-  } catch (e) {
-    error.value = e?.data?.message || "Gagal mengambil data hak akses.";
+  } catch (value) {
+    if (requestVersion !== version) return;
+
+    error.value = value?.data?.message || "Gagal memuat hak akses.";
   } finally {
-    loading.value = false;
+    if (requestVersion === version) {
+      loading.value = false;
+    }
   }
 }
 
-watch(roleId, loadPermissions, { immediate: true });
+onMounted(load);
+watch(() => route.params.id, load);
+
+onBeforeUnmount(() => {
+  version++;
+});
 </script>
 
 <template>
   <div>
-    <div v-if="error" class="alert alert-danger">
+    <NuxtLink to="/user/role" class="btn mb-3"> Kembali ke Daftar Role </NuxtLink>
+
+    <div v-if="error" class="alert alert-danger" role="alert">
       {{ error }}
-
-      <button type="button" class="btn btn-sm btn-outline-danger ms-2" @click="loadPermissions">Coba Lagi</button>
     </div>
 
-    <div v-if="loading" class="text-center py-5">
-      <div class="spinner-border text-primary" />
-      <p class="mt-2 text-secondary">Memuat hak akses...</p>
-    </div>
+    <div v-if="loading" class="text-center py-4">Memuat hak akses...</div>
 
     <template v-else-if="role">
-      <!-- Informasi Role -->
       <div class="card mb-3">
         <div class="card-body">
-          <div class="row g-3">
-            <div class="col-md-4 col-lg-3">
-              <label class="form-label"> Nama Role </label>
+          <div class="mb-3">
+            <label for="role-name" class="form-label"> Nama Role </label>
 
-              <input :value="role.nama_role" type="text" class="form-control" readonly disabled />
-            </div>
-
-            <div class="col-md-4 col-lg-3">
-              <label class="form-label"> Deskripsi </label>
-
-              <input :value="role.deskripsi || '-'" type="text" class="form-control" readonly disabled />
-            </div>
+            <input id="role-name" :value="role.nama_role" class="form-control" disabled />
           </div>
+
+          <label for="role-description" class="form-label"> Deskripsi </label>
+
+          <textarea id="role-description" :value="description" rows="3" class="form-control" disabled />
         </div>
       </div>
 
-      <!-- Tabel Hak Akses -->
       <div class="card">
-        <div class="table-responsive card-body p-0">
-          <table class="table table-vcenter">
+        <div class="table-responsive">
+          <table class="table table-vcenter card-table">
             <thead>
               <tr>
-                <th width="5">No</th>
-                <th>Modul/Fitur</th>
-                <th class="text-center">Akses</th>
-                <th class="text-center">Create</th>
+                <th>No</th>
+
+                <th :aria-sort="ascending ? 'ascending' : 'descending'">
+                  <button type="button" class="btn btn-link p-0 text-reset" @click="ascending = !ascending">Modul/Fitur {{ ascending ? "↑" : "↓" }}</button>
+                </th>
+
+                <th>Akses</th>
+                <th>Create</th>
                 <th>Read</th>
                 <th>Update</th>
                 <th>Delete</th>
@@ -91,23 +105,20 @@ watch(roleId, loadPermissions, { immediate: true });
             </thead>
 
             <tbody>
-              <tr v-for="(item, index) in hakAkses" :key="item.id">
-                <td class="text-center">
-                  {{ index + 1 }}
+              <tr v-for="(item, index) in permissions" :key="item.id">
+                <td>{{ index + 1 }}</td>
+                <td>{{ item.modul_fitur }}</td>
+
+                <td>
+                  <span :class="item.akses ? 'text-success' : 'text-danger'" :aria-label="item.akses ? 'Diizinkan' : 'Tidak diizinkan'">
+                    {{ item.akses ? "✓" : "✕" }}
+                  </span>
                 </td>
 
                 <td>
-                  {{ item.modul_fitur }}
-                </td>
-
-                <td class="text-center">
-                  <IconCircleCheckFilled v-if="item.akses" class="text-green" />
-                  <IconXboxXFilled v-else class="text-red" />
-                </td>
-
-                <td class="text-center">
-                  <IconCircleCheckFilled v-if="item.create" class="text-green" />
-                  <IconXboxXFilled v-else class="text-red" />
+                  <span :class="item.create ? 'text-success' : 'text-danger'" :aria-label="item.create ? 'Diizinkan' : 'Tidak diizinkan'">
+                    {{ item.create ? "✓" : "✕" }}
+                  </span>
                 </td>
 
                 <td>{{ item.read }}</td>
@@ -115,8 +126,8 @@ watch(roleId, loadPermissions, { immediate: true });
                 <td>{{ item.delete }}</td>
               </tr>
 
-              <tr v-if="hakAkses.length === 0">
-                <td colspan="7" class="text-center py-4 text-secondary">Belum ada data hak akses.</td>
+              <tr v-if="!permissions.length">
+                <td colspan="7" class="text-center py-4">Tidak ada data hak akses.</td>
               </tr>
             </tbody>
           </table>

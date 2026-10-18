@@ -20,6 +20,7 @@ router.use(
       persistAuthorization: false,
       displayRequestDuration: true,
       filter: true,
+      withCredentials: true,
     },
   }),
 );

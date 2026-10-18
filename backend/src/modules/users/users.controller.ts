@@ -1,295 +1,150 @@
-import type { Request, Response, NextFunction } from "express";
+import type { Response, NextFunction } from "express";
 
 import { z } from "zod";
 
-import { getUsers, getUserById, getEmployeeOptions, createUser, UserServiceError, updateUser, changeUserStatus, deleteUser } from "./users.service.js";
-
 import type { AuthRequest } from "../../middlewares/auth.middleware.js";
 
-const listQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(10),
-  search: z.string().trim().max(100).default(""),
+import { getUsers, getUserById, getEmployeeOptions, usernameAvailable, createUser, updateUser, changeUserStatus, deleteUser, UserServiceError } from "./users.service.js";
+
+import { generatePassword } from "./password.util.js";
+
+import { userIdSchema, userListSchema, employeeOptionsSchema, createUserSchema, updateUserSchema, userStatusSchema, usernameQuerySchema } from "./users.schema.js";
+
+type Handler = (req: AuthRequest, res: Response) => Promise<void>;
+
+function wrap(handler: Handler) {
+  return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await handler(req, res);
+    } catch (error) {
+      if (error instanceof UserServiceError) {
+        res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+        });
+        return;
+      }
+
+      if (error instanceof z.ZodError) {
+        res.status(400).json({
+          success: false,
+          message: "Periksa kembali data pengguna.",
+          errors: z.flattenError(error),
+        });
+        return;
+      }
+
+      next(error);
+    }
+  };
+}
+
+export const listUsers = wrap(async (req, res) => {
+  const query = userListSchema.parse(req.query);
+  const result = await getUsers(query);
+
+  res.status(200).json({
+    success: true,
+    message: "Daftar pengguna berhasil diambil.",
+    data: result.users,
+    pagination: result.pagination,
+  });
 });
 
-export async function listUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = listQuerySchema.safeParse(req.query);
+export const detailUser = wrap(async (req, res) => {
+  const id = userIdSchema.parse(req.params.id);
+  const user = await getUserById(id);
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        message: "Parameter query tidak valid.",
-      });
-      return;
-    }
-
-    const result = await getUsers(parsed.data);
-
-    res.json({
-      success: true,
-      message: "Daftar pengguna berhasil diambil.",
-      data: result.users,
-      pagination: result.pagination,
-    });
-  } catch (error) {
-    next(error);
+  if (!user) {
+    throw new UserServiceError("Pengguna tidak ditemukan.", 404);
   }
-}
 
-const userIdSchema = z.coerce.number().int().positive();
-
-export async function detailUser(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = userIdSchema.safeParse(req.params.id);
-
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        message: "ID pengguna tidak valid.",
-      });
-      return;
-    }
-
-    const user = await getUserById(parsed.data);
-
-    if (!user) {
-      res.status(404).json({
-        success: false,
-        message: "Pengguna tidak ditemukan.",
-      });
-      return;
-    }
-
-    res.json({
-      success: true,
-      message: "Detail pengguna berhasil diambil.",
-      data: user,
-    });
-  } catch (error) {
-    next(error);
-  }
-}
-
-const employeeOptionsSchema = z.object({
-  search: z.string().trim().max(100).default(""),
-  limit: z.coerce.number().int().min(1).max(50).default(10),
+  res.status(200).json({
+    success: true,
+    data: user,
+  });
 });
 
-export async function employeeOptions(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = employeeOptionsSchema.safeParse(req.query);
+export const employeeOptions = wrap(async (req, res) => {
+  const query = employeeOptionsSchema.parse(req.query);
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        message: "Parameter pencarian tidak valid.",
-      });
-      return;
-    }
+  const employees = await getEmployeeOptions(query.search, query.limit);
 
-    const employees = await getEmployeeOptions(parsed.data.search, parsed.data.limit);
-
-    res.json({
-      success: true,
-      message: "Pilihan pegawai berhasil diambil.",
-      data: employees,
-    });
-  } catch (error) {
-    next(error);
-  }
-}
-
-const createUserSchema = z.object({
-  id_pegawai: z.number().int().positive(),
-
-  id_role: z.number().int().positive(),
-
-  username: z
-    .string()
-    .min(6, "Username minimal 6 karakter.")
-    .max(50)
-    .regex(/^[a-z0-9]+$/, "Username hanya boleh huruf kecil dan angka."),
-
-  nama: z.string().trim().min(2).max(100),
-
-  email: z.email().max(255),
+  res.status(200).json({
+    success: true,
+    data: employees,
+  });
 });
 
-export async function storeUser(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = createUserSchema.safeParse(req.body);
+export const checkUsername = wrap(async (req, res) => {
+  const query = usernameQuerySchema.parse(req.query);
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        message: "Validasi data pengguna gagal.",
-        errors: z.flattenError(parsed.error),
-      });
-      return;
-    }
+  res.status(200).json({
+    success: true,
+    data: {
+      available: await usernameAvailable(query.username, query.excludeId),
+    },
+  });
+});
 
-    const result = await createUser(parsed.data, req.auth!.user.id);
+export const generateUserPassword = wrap(async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
 
-    res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({
+    success: true,
+    data: {
+      password: generatePassword(12),
+    },
+  });
+});
 
-    res.status(201).json({
-      success: true,
-      message: "Pengguna berhasil dibuat.",
-      data: result,
-    });
-  } catch (error) {
-    if (error instanceof UserServiceError) {
-      res.status(error.statusCode).json({
-        success: false,
-        message: error.message,
-      });
-      return;
-    }
+export const storeUser = wrap(async (req, res) => {
+  const input = createUserSchema.parse(req.body);
+  const user = await createUser(input, req.auth!.user.id);
 
-    next(error);
-  }
-}
+  res.setHeader("Cache-Control", "no-store");
 
-const updateUserSchema = z
-  .object({
-    username: z
-      .string()
-      .min(6)
-      .max(50)
-      .regex(/^[a-z0-9]+$/)
-      .optional(),
+  res.status(201).json({
+    success: true,
+    message: "Pengguna berhasil dibuat.",
+    data: user,
+  });
+});
 
-    nama: z.string().trim().min(2).max(100).optional(),
+export const patchUser = wrap(async (req, res) => {
+  const id = userIdSchema.parse(req.params.id);
+  const input = updateUserSchema.parse(req.body);
 
-    email: z.email().max(255).optional(),
+  const user = await updateUser(id, input, req.auth!.user.id);
 
-    id_role: z.number().int().positive().optional(),
+  res.status(200).json({
+    success: true,
+    message: "Pengguna berhasil diperbarui.",
+    data: user,
+  });
+});
 
-    id_pegawai: z.number().int().positive().nullable().optional(),
-  })
-  .strict()
-  .refine((data) => Object.keys(data).length > 0, "Minimal satu field harus diisi.");
+export const patchUserStatus = wrap(async (req, res) => {
+  const id = userIdSchema.parse(req.params.id);
+  const input = userStatusSchema.parse(req.body);
 
-const statusSchema = z
-  .object({
-    disabled: z.boolean(),
-  })
-  .strict();
+  const result = await changeUserStatus(id, input.disabled, req.auth!.user.id);
 
-export async function patchUser(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const id = Number(req.params.id);
+  res.status(200).json({
+    success: true,
+    message: input.disabled ? "Pengguna berhasil dinonaktifkan." : "Pengguna berhasil diaktifkan.",
+    data: result,
+  });
+});
 
-    if (!Number.isSafeInteger(id) || id <= 0) {
-      res.status(400).json({
-        success: false,
-        message: "ID pengguna tidak valid.",
-      });
-      return;
-    }
+export const destroyUser = wrap(async (req, res) => {
+  const id = userIdSchema.parse(req.params.id);
 
-    const parsed = updateUserSchema.safeParse(req.body);
+  const result = await deleteUser(id, req.auth!.user.id);
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        message: "Validasi update pengguna gagal.",
-        errors: z.flattenError(parsed.error),
-      });
-      return;
-    }
-
-    const result = await updateUser(id, parsed.data, req.auth!.user.id);
-
-    res.json({
-      success: true,
-      message: "Pengguna berhasil diperbarui.",
-      data: result,
-    });
-  } catch (error) {
-    if (error instanceof UserServiceError) {
-      res.status(error.statusCode).json({
-        success: false,
-        message: error.message,
-      });
-      return;
-    }
-
-    next(error);
-  }
-}
-
-export async function patchUserStatus(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const id = Number(req.params.id);
-
-    if (!Number.isSafeInteger(id) || id <= 0) {
-      res.status(400).json({
-        success: false,
-        message: "ID pengguna tidak valid.",
-      });
-      return;
-    }
-
-    const parsed = statusSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        message: "Status harus berupa boolean.",
-      });
-      return;
-    }
-
-    const result = await changeUserStatus(id, parsed.data.disabled, req.auth!.user.id);
-
-    res.json({
-      success: true,
-      message: parsed.data.disabled ? "Pengguna berhasil dinonaktifkan." : "Pengguna berhasil diaktifkan.",
-      data: result,
-    });
-  } catch (error) {
-    if (error instanceof UserServiceError) {
-      res.status(error.statusCode).json({
-        success: false,
-        message: error.message,
-      });
-      return;
-    }
-
-    next(error);
-  }
-}
-
-export async function destroyUser(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const id = Number(req.params.id);
-
-    if (!Number.isSafeInteger(id) || id <= 0) {
-      res.status(400).json({
-        success: false,
-        message: "ID pengguna tidak valid.",
-      });
-      return;
-    }
-
-    const result = await deleteUser(id, req.auth!.user.id);
-
-    res.json({
-      success: true,
-      message: "Pengguna berhasil dihapus.",
-      data: result,
-    });
-  } catch (error) {
-    if (error instanceof UserServiceError) {
-      res.status(error.statusCode).json({
-        success: false,
-        message: error.message,
-      });
-      return;
-    }
-
-    next(error);
-  }
-}
+  res.status(200).json({
+    success: true,
+    message: "Pengguna berhasil dihapus.",
+    data: result,
+  });
+});

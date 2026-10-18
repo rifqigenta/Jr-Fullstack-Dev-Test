@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import type { AuthRequest } from "../../middlewares/auth.middleware.js";
 
-import { createSettingSchema, updateSettingSchema, attendanceSchema, calculateSchema, monthQuerySchema, historyQuerySchema } from "./transport.schema.js";
+import { createSettingSchema, updateSettingSchema, attendanceSchema, calculateSchema, monthQuerySchema, yearQuerySchema, historyQuerySchema } from "./transport.schema.js";
 
 import {
   TransportError,
@@ -14,204 +14,146 @@ import {
   saveMonthlyAttendance,
   calculateMonthlyTransport,
   getMyTransportAllowance,
+  getTransportMonths,
   getTransportHistory,
 } from "./transport.service.js";
 
-function sendError(error: unknown, res: Response, next: NextFunction) {
-  if (error instanceof TransportError) {
-    res.status(error.statusCode).json({
-      success: false,
-      message: error.message,
-    });
-    return;
-  }
+const idSchema = z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 
-  next(error);
-}
+type Handler = (req: AuthRequest, res: Response) => Promise<void>;
 
-function parseId(value: unknown): number {
-  const id = Number(value);
+function wrap(handler: Handler) {
+  return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const originalJson = res.json.bind(res);
 
-  if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new TransportError("ID tidak valid.", 400);
-  }
+      res.json = ((body: unknown) => {
+        const safeBody = JSON.parse(JSON.stringify(body, (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value)));
 
-  return id;
-}
+        return originalJson(safeBody);
+      }) as typeof res.json;
 
-// Normalisasi bigint dan DECIMAL agar aman untuk JSON.
-function jsonSafe<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item))) as T;
-}
+      await handler(req, res);
+    } catch (error) {
+      if (error instanceof TransportError) {
+        res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+        });
+        return;
+      }
 
-export async function listSettings(_req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const data = await listTransportSettings();
+      if (error instanceof z.ZodError) {
+        res.status(400).json({
+          success: false,
+          message: "Periksa kembali parameter atau isian tunjangan.",
+          errors: z.flattenError(error),
+        });
+        return;
+      }
 
-    res.status(200).json({
-      success: true,
-      data: jsonSafe(data),
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
-}
-
-export async function storeSetting(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = createSettingSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        errors: z.flattenError(parsed.error),
-      });
-      return;
+      next(error);
     }
-
-    const data = await createTransportSetting(parsed.data, req.auth!.user.id);
-
-    res.status(201).json({
-      success: true,
-      message: "Pengaturan tarif berhasil dibuat.",
-      data: jsonSafe(data),
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
+  };
 }
 
-export async function patchSetting(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const id = parseId(req.params.id);
-    const parsed = updateSettingSchema.safeParse(req.body);
+export const listSettings = wrap(async (_req, res) => {
+  res.json({
+    success: true,
+    data: await listTransportSettings(),
+  });
+});
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        errors: z.flattenError(parsed.error),
-      });
-      return;
-    }
+export const storeSetting = wrap(async (req, res) => {
+  const input = createSettingSchema.parse(req.body);
 
-    const data = await updateTransportSetting(id, parsed.data, req.auth!.user.id);
+  const data = await createTransportSetting(input, req.auth!.user.id);
 
-    res.status(200).json({
-      success: true,
-      message: "Pengaturan tarif berhasil diperbarui.",
-      data: jsonSafe(data),
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
-}
+  res.status(201).json({
+    success: true,
+    message: "Pengaturan tarif berhasil dibuat.",
+    data,
+  });
+});
 
-export async function destroySetting(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const data = await deleteTransportSetting(parseId(req.params.id), req.auth!.user.id);
+export const patchSetting = wrap(async (req, res) => {
+  const id = idSchema.parse(req.params.id);
+  const input = updateSettingSchema.parse(req.body);
 
-    res.status(200).json({
-      success: true,
-      message: "Pengaturan tarif berhasil dihapus.",
-      data,
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
-}
+  const data = await updateTransportSetting(id, input, req.auth!.user.id);
 
-export async function putAttendance(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = attendanceSchema.safeParse(req.body);
+  res.json({
+    success: true,
+    message: "Pengaturan tarif berhasil diperbarui.",
+    data,
+  });
+});
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        errors: z.flattenError(parsed.error),
-      });
-      return;
-    }
+export const destroySetting = wrap(async (req, res) => {
+  const id = idSchema.parse(req.params.id);
 
-    const data = await saveMonthlyAttendance(parsed.data, req.auth!.user.id);
+  const data = await deleteTransportSetting(id, req.auth!.user.id);
 
-    res.status(200).json({
-      success: true,
-      message: "Kehadiran berhasil disimpan.",
-      data,
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
-}
+  res.json({
+    success: true,
+    message: "Pengaturan tarif berhasil dihapus.",
+    data,
+  });
+});
 
-export async function calculateTransport(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = calculateSchema.safeParse(req.body);
+export const putAttendance = wrap(async (req, res) => {
+  const input = attendanceSchema.parse(req.body);
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        errors: z.flattenError(parsed.error),
-      });
-      return;
-    }
+  const data = await saveMonthlyAttendance(input, req.auth!.user.id);
 
-    const data = await calculateMonthlyTransport(parsed.data, req.auth!.user.id);
+  res.json({
+    success: true,
+    message: "Kehadiran berhasil disimpan. Hitung ulang untuk memperbarui tunjangan.",
+    data,
+  });
+});
 
-    res.status(200).json({
-      success: true,
-      message: "Tunjangan transport berhasil dihitung.",
-      data,
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
-}
+export const calculateTransport = wrap(async (req, res) => {
+  const input = calculateSchema.parse(req.body);
 
-export async function myTransport(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = monthQuerySchema.safeParse(req.query);
+  const data = await calculateMonthlyTransport(input, req.auth!.user.id);
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        errors: z.flattenError(parsed.error),
-      });
-      return;
-    }
+  res.json({
+    success: true,
+    message: "Tunjangan transport berhasil dihitung ulang.",
+    data,
+  });
+});
 
-    const data = await getMyTransportAllowance(req.auth!.user.id, parsed.data.tahun, parsed.data.bulan);
+export const myTransport = wrap(async (req, res) => {
+  const query = monthQuerySchema.parse(req.query);
 
-    res.status(200).json({
-      success: true,
-      message: data ? "Tunjangan berhasil diambil." : "Belum ada perhitungan tunjangan untuk periode ini.",
-      data: jsonSafe(data),
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
-}
+  const data = await getMyTransportAllowance(req.auth!.user.id, query.tahun, query.bulan);
 
-export async function transportHistory(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const parsed = historyQuerySchema.safeParse(req.query);
+  res.json({
+    success: true,
+    message: data ? "Tunjangan berhasil diambil." : "Belum ada perhitungan untuk periode ini.",
+    data,
+  });
+});
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        errors: z.flattenError(parsed.error),
-      });
-      return;
-    }
+export const transportMonths = wrap(async (req, res) => {
+  const query = yearQuerySchema.parse(req.query);
 
-    const result = await getTransportHistory(parsed.data);
+  res.json({
+    success: true,
+    data: await getTransportMonths(req.auth!.user.id, query.tahun),
+  });
+});
 
-    res.status(200).json({
-      success: true,
-      data: jsonSafe(result.rows),
-      pagination: result.pagination,
-    });
-  } catch (error) {
-    sendError(error, res, next);
-  }
-}
+export const transportHistory = wrap(async (req, res) => {
+  const query = historyQuerySchema.parse(req.query);
+
+  const result = await getTransportHistory(query, req.auth!.user.id);
+
+  res.json({
+    success: true,
+    data: result.rows,
+    pagination: result.pagination,
+  });
+});

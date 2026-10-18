@@ -15,42 +15,46 @@ type RecentEmployeeRow = {
   nama_pegawai: string;
   foto_pegawai: string | null;
   tanggal_masuk: Date | string;
-  status: "Aktif" | "Nonaktif";
-  status_kontrak: "PKWTT" | "PKWT" | "Magang" | null;
+  status: string;
+  status_kontrak: string | null;
   nama_jabatan: string | null;
   nama_departemen: string | null;
 };
 
+function dateString(value: Date | string): string {
+  if (value instanceof Date) {
+    return [value.getFullYear(), String(value.getMonth() + 1).padStart(2, "0"), String(value.getDate()).padStart(2, "0")].join("-");
+  }
+
+  return String(value).slice(0, 10);
+}
+
 export async function getHrdDashboard() {
-  const [countRows, contractRows, genderRows, recentEmployees] = await Promise.all([
+  const results = await Promise.all([
     pool.query<CountRow[]>(
       `
         SELECT COUNT(*) AS total
         FROM pegawai
         WHERE deleted_at IS NULL
-        `,
+      `,
     ),
 
     pool.query<GroupRow[]>(
       `
-        SELECT
-          status_kontrak AS label,
-          COUNT(*) AS total
+        SELECT status_kontrak AS label, COUNT(*) AS total
         FROM pegawai
         WHERE deleted_at IS NULL
         GROUP BY status_kontrak
-        `,
+      `,
     ),
 
     pool.query<GroupRow[]>(
       `
-        SELECT
-          jenis_kelamin AS label,
-          COUNT(*) AS total
+        SELECT jenis_kelamin AS label, COUNT(*) AS total
         FROM pegawai
         WHERE deleted_at IS NULL
         GROUP BY jenis_kelamin
-        `,
+      `,
     ),
 
     pool.query<RecentEmployeeRow[]>(
@@ -66,16 +70,16 @@ export async function getHrdDashboard() {
           j.nama AS nama_jabatan,
           d.nama AS nama_departemen
         FROM pegawai p
-        LEFT JOIN master_data j
-          ON j.id = p.id_jabatan
-        LEFT JOIN master_data d
-          ON d.id = p.id_departemen
+        LEFT JOIN master_data j ON j.id = p.id_jabatan
+        LEFT JOIN master_data d ON d.id = p.id_departemen
         WHERE p.deleted_at IS NULL
         ORDER BY p.tanggal_masuk DESC, p.id DESC
         LIMIT 5
-        `,
+      `,
     ),
-  ]);
+  ] as const);
+
+  const [counts, contractRows, genderRows, recentEmployees] = results;
 
   const contracts = {
     PKWTT: 0,
@@ -87,10 +91,19 @@ export async function getHrdDashboard() {
   for (const row of contractRows) {
     const count = Number(row.total);
 
-    if (row.label === "PKWTT") contracts.PKWTT = count;
-    else if (row.label === "PKWT") contracts.PKWT = count;
-    else if (row.label === "Magang") contracts.Magang = count;
-    else contracts.belum_diisi = count;
+    switch (row.label) {
+      case "PKWTT":
+        contracts.PKWTT += count;
+        break;
+      case "PKWT":
+        contracts.PKWT += count;
+        break;
+      case "Magang":
+        contracts.Magang += count;
+        break;
+      default:
+        contracts.belum_diisi += count;
+    }
   }
 
   const genders = {
@@ -102,19 +115,26 @@ export async function getHrdDashboard() {
   for (const row of genderRows) {
     const count = Number(row.total);
 
-    if (row.label === "Laki-laki") {
-      genders.laki_laki = count;
-    } else if (row.label === "Perempuan") {
-      genders.perempuan = count;
-    } else {
-      genders.belum_diisi = count;
+    switch (row.label) {
+      case "Laki-laki":
+        genders.laki_laki += count;
+        break;
+      case "Perempuan":
+        genders.perempuan += count;
+        break;
+      default:
+        genders.belum_diisi += count;
     }
   }
 
   return {
-    total_pegawai: Number(countRows[0]?.total ?? 0),
+    total_pegawai: Number(counts[0]?.total || 0),
     berdasarkan_kontrak: contracts,
     berdasarkan_gender: genders,
-    pegawai_terbaru: recentEmployees,
+
+    pegawai_terbaru: recentEmployees.map((employee) => ({
+      ...employee,
+      tanggal_masuk: dateString(employee.tanggal_masuk),
+    })),
   };
 }

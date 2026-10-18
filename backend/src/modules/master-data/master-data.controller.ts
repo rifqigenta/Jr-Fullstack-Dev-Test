@@ -5,14 +5,13 @@ import { z } from "zod";
 import { getPositions, getDepartments, getRegions } from "./master-data.service.js";
 
 const regionQuerySchema = z.object({
-  search: z.string().trim().max(100).default(""),
+  search: z.string().trim().max(100, "Pencarian maksimal 100 karakter.").default(""),
 
   limit: z.coerce.number().int().min(1).max(50).default(10),
+
+  id: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
-/**
- * GET /api/master-data/positions
- */
 export async function listPositions(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const positions = await getPositions();
@@ -27,9 +26,6 @@ export async function listPositions(_req: Request, res: Response, next: NextFunc
   }
 }
 
-/**
- * GET /api/master-data/departments
- */
 export async function listDepartments(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const departments = await getDepartments();
@@ -44,9 +40,6 @@ export async function listDepartments(_req: Request, res: Response, next: NextFu
   }
 }
 
-/**
- * GET /api/master-data/regions
- */
 export async function listRegions(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const parsed = regionQuerySchema.safeParse(req.query);
@@ -60,7 +53,18 @@ export async function listRegions(req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    const regions = await getRegions(parsed.data.search, parsed.data.limit);
+    const { search, limit, id } = parsed.data;
+
+    if (id === undefined && search.length < 3) {
+      res.status(200).json({
+        success: true,
+        message: "Ketik minimal 3 karakter nama kecamatan.",
+        data: [],
+      });
+      return;
+    }
+
+    const regions = await getRegions(search, limit, id);
 
     res.status(200).json({
       success: true,

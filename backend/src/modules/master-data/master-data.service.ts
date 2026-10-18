@@ -12,9 +12,6 @@ type RegionRow = {
   provinsi: string;
 };
 
-/**
- * Mengambil daftar jabatan.
- */
 export async function getPositions(): Promise<MasterDataRow[]> {
   const rows = await pool.query<MasterDataRow[]>(
     `
@@ -31,9 +28,6 @@ export async function getPositions(): Promise<MasterDataRow[]> {
   return rows;
 }
 
-/**
- * Mengambil daftar departemen.
- */
 export async function getDepartments(): Promise<MasterDataRow[]> {
   const rows = await pool.query<MasterDataRow[]>(
     `
@@ -50,38 +44,49 @@ export async function getDepartments(): Promise<MasterDataRow[]> {
   return rows;
 }
 
-/**
- * Autocomplete wilayah.
- *
- * Bisa mencari berdasarkan:
- * - Kecamatan
- * - Kabupaten/kota
- * - Provinsi
- */
-export async function getRegions(search: string, limit: number): Promise<RegionRow[]> {
-  const keyword = `%${search}%`;
+export async function getRegions(search: string, limit: number, id?: number): Promise<RegionRow[]> {
+  if (id !== undefined) {
+    return pool.query<RegionRow[]>(
+      `
+        SELECT
+          id,
+          kecamatan,
+          kabupaten,
+          provinsi
+        FROM master_wilayah
+        WHERE id = ?
+        LIMIT 1
+      `,
+      [id],
+    );
+  }
 
-  const rows = await pool.query<RegionRow[]>(
+  const normalizedSearch = search.trim();
+
+  if (normalizedSearch.length < 3) {
+    return [];
+  }
+
+  const escapedSearch = normalizedSearch.replace(/[=%_]/g, (character) => `=${character}`);
+
+  const keyword = `%${escapedSearch}%`;
+
+  return pool.query<RegionRow[]>(
     `
-    SELECT
-      id,
-      kecamatan,
-      kabupaten,
-      provinsi
-    FROM master_wilayah
-    WHERE
-      kecamatan LIKE ?
-      OR kabupaten LIKE ?
-      OR provinsi LIKE ?
-    ORDER BY
-      provinsi ASC,
-      kabupaten ASC,
-      kecamatan ASC,
-      id ASC
-    LIMIT ?
+      SELECT
+        id,
+        kecamatan,
+        kabupaten,
+        provinsi
+      FROM master_wilayah
+      WHERE kecamatan LIKE ? ESCAPE '='
+      ORDER BY
+        kecamatan ASC,
+        kabupaten ASC,
+        provinsi ASC,
+        id ASC
+      LIMIT ?
     `,
-    [keyword, keyword, keyword, limit],
+    [keyword, limit],
   );
-
-  return rows;
 }

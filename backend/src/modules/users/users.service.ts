@@ -1,12 +1,19 @@
-import { pool } from "../../config/database.js";
 import bcrypt from "bcryptjs";
-import { generatePassword } from "./password.util.js";
+import type { PoolConnection } from "mariadb";
 
-export type UserListQuery = {
-  page: number;
-  limit: number;
-  search: string;
-};
+import { pool } from "../../config/database.js";
+
+import type { UserListQuery, CreateUserInput, UpdateUserInput } from "./users.schema.js";
+
+export class UserServiceError extends Error {
+  constructor(
+    message: string,
+    public statusCode = 400,
+  ) {
+    super(message);
+    this.name = "UserServiceError";
+  }
+}
 
 type UserRow = {
   id: number;
@@ -18,318 +25,358 @@ type UserRow = {
   id_pegawai: number | null;
   nama_pegawai: string | null;
   nip: string | null;
-  disabled: number;
-  created_at: Date;
-};
-
-export async function getUsers(query: UserListQuery) {
-  const { page, limit, search } = query;
-
-  const offset = (page - 1) * limit;
-
-  const whereClause = search
-    ? `
-      WHERE u.deleted_at IS NULL 
-      AND (
-        u.username LIKE ?
-        OR u.nama LIKE ?
-        OR u.email LIKE ?
-        OR p.nama_pegawai LIKE ?
-      )
-    `
-    : "";
-
-  const searchParams = search ? Array(4).fill(`%${search}%`) : [];
-
-  const countRows = await pool.query<Array<{ total: number | bigint }>>(
-    `
-    SELECT COUNT(*) AS total
-    FROM \`user\` u
-    LEFT JOIN pegawai p ON p.id = u.id_pegawai
-    ${whereClause}
-    `,
-    searchParams,
-  );
-
-  const total = Number(countRows[0]?.total ?? 0);
-
-  const rows = await pool.query<UserRow[]>(
-    `
-    SELECT
-      u.id,
-      u.username,
-      u.nama,
-      u.email,
-      u.id_role,
-      r.nama_role,
-      u.id_pegawai,
-      p.nama_pegawai,
-      p.nip,
-      u.disabled,
-      u.created_at
-
-    FROM \`user\` u
-
-    JOIN user_role r
-      ON r.id = u.id_role
-
-    LEFT JOIN pegawai p
-      ON p.id = u.id_pegawai
-
-    ${whereClause}
-
-    ORDER BY u.created_at DESC, u.id DESC
-    LIMIT ? OFFSET ?
-    `,
-    [...searchParams, limit, offset],
-  );
-
-  return {
-    users: rows.map((user) => ({
-      ...user,
-      disabled: Boolean(user.disabled),
-    })),
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-    },
-  };
-}
-
-type UserDetailRow = {
-  id: number;
-  username: string;
-  nama: string;
-  email: string | null;
-  id_role: number;
-  nama_role: string;
-  id_pegawai: number | null;
-  nama_pegawai: string | null;
-  nip: string | null;
-  disabled: number;
+  disabled: number | bigint;
+  id_jabatan: number | null;
+  id_departemen: number | null;
+  nama_jabatan: string | null;
+  nama_departemen: string | null;
   last_login: Date | null;
   created_at: Date;
   updated_at: Date | null;
 };
 
-export async function getUserById(id: number) {
-  const rows = await pool.query<UserDetailRow[]>(
-    `
-    SELECT
-      u.id,
-      u.username,
-      u.nama,
-      u.email,
-      u.id_role,
-      r.nama_role,
-      u.id_pegawai,
-      p.nama_pegawai,
-      p.nip,
-      u.disabled,
-      u.last_login,
-      u.created_at,
-      u.updated_at
-    FROM \`user\` u
-    JOIN user_role r
-      ON r.id = u.id_role
-    LEFT JOIN pegawai p
-      ON p.id = u.id_pegawai
-    WHERE u.id = ?
-      AND u.deleted_at IS NULL
-    LIMIT 1
-    `,
-    [id],
-  );
-
-  const user = rows[0];
-
-  if (!user) {
-    return null;
-  }
-
-  return {
-    ...user,
-    disabled: Boolean(user.disabled),
-  };
-}
-
-type EmployeeOptionRow = {
+type EmployeeRow = {
   id: number;
   nip: string;
   nama_pegawai: string;
   email: string;
   nomor_hp: string | null;
+  id_jabatan: number;
+  id_departemen: number;
 };
 
-export async function getEmployeeOptions(search: string, limit: number) {
-  const keyword = `%${search}%`;
+type UserRecord = {
+  id: number;
+  username: string;
+  id_role: number;
+  id_pegawai: number | null;
+  disabled: number | bigint;
+};
 
-  const rows = await pool.query<EmployeeOptionRow[]>(
-    `
-    SELECT
-      p.id,
-      p.nip,
-      p.nama_pegawai,
-      p.email,
-      p.nomor_hp
-    FROM pegawai p
-    WHERE p.deleted_at IS NULL
-      AND (
-        p.nama_pegawai LIKE ?
-        OR p.nip LIKE ?
-        OR p.email LIKE ?
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM \`user\` u
-        WHERE u.id_pegawai = p.id
-      )
-    ORDER BY p.nama_pegawai ASC
-    LIMIT ?
-    `,
-    [keyword, keyword, keyword, limit],
-  );
+const userSelect = `
+  SELECT
+    u.id,
+    u.username,
+    u.nama,
+    u.email,
+    u.id_role,
+    r.nama_role,
+    u.id_pegawai,
+    p.nama_pegawai,
+    p.nip,
+    p.id_jabatan,
+    p.id_departemen,
+    j.nama AS nama_jabatan,
+    d.nama AS nama_departemen,
+    u.disabled,
+    u.last_login,
+    u.created_at,
+    u.updated_at
+  FROM \`user\` u
+  JOIN user_role r ON r.id = u.id_role
+  LEFT JOIN pegawai p ON p.id = u.id_pegawai
+  LEFT JOIN master_data j ON j.id = p.id_jabatan
+  LEFT JOIN master_data d ON d.id = p.id_departemen
+`;
 
-  return rows;
+function isDuplicateError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "errno" in error && error.errno === 1062;
 }
 
-export type CreateUserInput = {
-  id_pegawai: number;
-  id_role: number;
-  username: string;
-  nama: string;
-  email: string;
-};
+function escapeLike(value: string): string {
+  return value.replace(/[=%_]/g, (character) => `=${character}`);
+}
 
-export class UserServiceError extends Error {
-  constructor(
-    message: string,
-    public statusCode = 400,
-  ) {
-    super(message);
+async function log(connection: PoolConnection, title: string, content: string, actorId: number) {
+  await connection.query(
+    `
+      INSERT INTO activities (title, content, created_by)
+      VALUES (?, ?, ?)
+    `,
+    [title, content, actorId],
+  );
+}
+
+async function revokeSessions(connection: PoolConnection, userId: number) {
+  await connection.query(
+    `
+      UPDATE auth_sessions
+      SET revoked_at = UTC_TIMESTAMP(3)
+      WHERE id_user = ? AND revoked_at IS NULL
+    `,
+    [userId],
+  );
+}
+
+async function requireRole(connection: PoolConnection, roleId: number) {
+  const rows = await connection.query<Array<{ id: number; nama_role: string }>>("SELECT id, nama_role FROM user_role WHERE id = ? LIMIT 1", [roleId]);
+
+  if (!rows[0]) {
+    throw new UserServiceError("Role tidak ditemukan.", 404);
+  }
+
+  return rows[0];
+}
+
+async function requireEmployee(connection: PoolConnection, employeeId: number) {
+  const rows = await connection.query<EmployeeRow[]>(
+    `
+      SELECT
+        id, nip, nama_pegawai, email, nomor_hp,
+        id_jabatan, id_departemen
+      FROM pegawai
+      WHERE id = ? AND deleted_at IS NULL
+      FOR UPDATE
+    `,
+    [employeeId],
+  );
+
+  if (!rows[0]) {
+    throw new UserServiceError("Pegawai tidak ditemukan.", 404);
+  }
+
+  return rows[0];
+}
+
+async function validateMaster(connection: PoolConnection, id: number, type: "jabatan" | "departemen") {
+  const rows = await connection.query<Array<{ id: number }>>(
+    `
+      SELECT id
+      FROM master_data
+      WHERE id = ? AND tipe = ?
+      LIMIT 1
+    `,
+    [id, type],
+  );
+
+  if (!rows.length) {
+    throw new UserServiceError(`${type === "jabatan" ? "Jabatan" : "Departemen"} tidak ditemukan.`, 404);
   }
 }
 
-type ExistingUserRow = {
-  id: number;
-};
+async function validateUnique(connection: PoolConnection, username: string, email: string, employeeId: number, excludeId = 0) {
+  const rows = await connection.query<Array<{ id: number }>>(
+    `
+      SELECT id
+      FROM \`user\`
+      WHERE id <> ?
+        AND (
+          username = ?
+          OR email = ?
+          OR id_pegawai = ?
+        )
+      LIMIT 1
+    `,
+    [excludeId, username, email, employeeId],
+  );
 
-type RoleRow = {
-  id: number;
-  nama_role: string;
-};
+  if (rows.length) {
+    throw new UserServiceError("Username, email, atau pegawai sudah digunakan.", 409);
+  }
+}
 
-type EmployeeRow = {
-  id: number;
-  nama_pegawai: string;
-  email: string;
-};
+async function lockUser(connection: PoolConnection, id: number) {
+  const rows = await connection.query<UserRecord[]>(
+    `
+      SELECT id, username, id_role, id_pegawai, disabled
+      FROM \`user\`
+      WHERE id = ? AND deleted_at IS NULL
+      FOR UPDATE
+    `,
+    [id],
+  );
+
+  if (!rows[0]) {
+    throw new UserServiceError("Pengguna tidak ditemukan.", 404);
+  }
+
+  return rows[0];
+}
+
+export async function getUsers(query: UserListQuery) {
+  const conditions = ["u.deleted_at IS NULL"];
+  const params: string[] = [];
+
+  if (query.search) {
+    const keyword = `%${escapeLike(query.search)}%`;
+
+    conditions.push(`
+      (
+        u.username LIKE ? ESCAPE '='
+        OR u.nama LIKE ? ESCAPE '='
+        OR u.email LIKE ? ESCAPE '='
+        OR p.nama_pegawai LIKE ? ESCAPE '='
+      )
+    `);
+
+    params.push(keyword, keyword, keyword, keyword);
+  }
+
+  const where = `WHERE ${conditions.join(" AND ")}`;
+
+  const counts = await pool.query<Array<{ total: number | bigint }>>(
+    `
+      SELECT COUNT(*) AS total
+      FROM \`user\` u
+      JOIN user_role r ON r.id = u.id_role
+      LEFT JOIN pegawai p ON p.id = u.id_pegawai
+      ${where}
+    `,
+    params,
+  );
+
+  const total = Number(counts[0]?.total || 0);
+
+  const sortBy = query.sortBy;
+
+  const sortColumn = sortBy === "nama" ? "u.nama" : sortBy === "username" ? "u.username" : sortBy === "status" ? "u.disabled" : "u.id";
+
+  const direction = query.sortOrder === "asc" ? "ASC" : "DESC";
+
+  const rows = await pool.query<UserRow[]>(
+    `
+      ${userSelect}
+      ${where}
+      ORDER BY ${sortColumn} ${direction}, u.id DESC
+      LIMIT ? OFFSET ?
+    `,
+    [...params, query.limit, (query.page - 1) * query.limit],
+  );
+
+  return {
+    users: rows.map((row) => ({
+      ...row,
+      disabled: Number(row.disabled) !== 0,
+    })),
+    pagination: {
+      page: query.page,
+      limit: query.limit,
+      total,
+      totalPages: Math.ceil(total / query.limit),
+    },
+  };
+}
+
+export async function getUserById(id: number) {
+  const rows = await pool.query<UserRow[]>(
+    `
+      ${userSelect}
+      WHERE u.id = ? AND u.deleted_at IS NULL
+      LIMIT 1
+    `,
+    [id],
+  );
+
+  return rows[0]
+    ? {
+        ...rows[0],
+        disabled: Number(rows[0].disabled) !== 0,
+      }
+    : null;
+}
+
+export async function getEmployeeOptions(search: string, limit: number) {
+  if (search.trim().length < 2) return [];
+
+  const keyword = `%${escapeLike(search.trim())}%`;
+
+  return pool.query<EmployeeRow[]>(
+    `
+      SELECT
+        p.id, p.nip, p.nama_pegawai, p.email, p.nomor_hp,
+        p.id_jabatan, p.id_departemen
+      FROM pegawai p
+      WHERE p.deleted_at IS NULL
+        AND (
+          p.nama_pegawai LIKE ? ESCAPE '='
+          OR p.nip LIKE ? ESCAPE '='
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM \`user\` u
+          WHERE u.id_pegawai = p.id
+        )
+      ORDER BY p.nama_pegawai ASC, p.id ASC
+      LIMIT ?
+    `,
+    [keyword, keyword, limit],
+  );
+}
+
+export async function usernameAvailable(username: string, excludeId = 0) {
+  const rows = await pool.query<Array<{ id: number }>>(
+    `
+      SELECT id
+      FROM \`user\`
+      WHERE username = ? AND id <> ?
+      LIMIT 1
+    `,
+    [username, excludeId],
+  );
+
+  return rows.length === 0;
+}
 
 export async function createUser(input: CreateUserInput, actorId: number) {
+  const passwordHash = await bcrypt.hash(input.password, 12);
   const connection = await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const roles = await connection.query<RoleRow[]>(
-      `
-      SELECT id, nama_role
-      FROM user_role
-      WHERE id = ?
-      LIMIT 1
-      `,
-      [input.id_role],
-    );
+    const role = await requireRole(connection, input.id_role);
+    const employee = await requireEmployee(connection, input.id_pegawai);
 
-    const role = roles[0];
+    await validateMaster(connection, input.id_jabatan, "jabatan");
+    await validateMaster(connection, input.id_departemen, "departemen");
 
-    if (!role) {
-      throw new UserServiceError("Role tidak ditemukan.", 404);
-    }
-
-    const employees = await connection.query<EmployeeRow[]>(
-      `
-      SELECT id, nama_pegawai, email
-      FROM pegawai
-      WHERE id = ?
-      LIMIT 1
-      `,
-      [input.id_pegawai],
-    );
-
-    if (!employees[0]) {
-      throw new UserServiceError("Pegawai tidak ditemukan.", 404);
-    }
-
-    const existingUsers = await connection.query<ExistingUserRow[]>(
-      `
-      SELECT id
-      FROM \`user\`
-      WHERE username = ?
-         OR email = ?
-         OR id_pegawai = ?
-      LIMIT 1
-      `,
-      [input.username, input.email, input.id_pegawai],
-    );
-
-    if (existingUsers.length > 0) {
-      throw new UserServiceError("Username, email, atau pegawai sudah digunakan.", 409);
-    }
-
-    const generatedPassword = generatePassword(12);
-
-    const passwordHash = await bcrypt.hash(generatedPassword, 12);
+    await validateUnique(connection, input.username, employee.email, employee.id);
 
     const result = await connection.query(
       `
-      INSERT INTO \`user\` (
-        id_role,
-        id_pegawai,
-        username,
-        password_hash,
-        nama,
-        email,
-        disabled
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO \`user\` (
+          id_role, id_pegawai, username, password_hash,
+          nama, email, disabled
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
-      [input.id_role, input.id_pegawai, input.username, passwordHash, input.nama, input.email],
+      [input.id_role, employee.id, input.username, passwordHash, employee.nama_pegawai, employee.email, input.disabled ? 1 : 0],
     );
-
-    const newUserId = Number(result.insertId);
 
     await connection.query(
       `
-      INSERT INTO activities (
-        title,
-        content,
-        created_by
-      )
-      VALUES (?, ?, ?)
+        UPDATE pegawai
+        SET
+          id_jabatan = ?,
+          id_departemen = ?,
+          updated_at = CURRENT_TIMESTAMP()
+        WHERE id = ?
       `,
-      ["CREATE_USER", `Membuat user ${input.username} (ID: ${newUserId})`, actorId],
+      [input.id_jabatan, input.id_departemen, employee.id],
     );
+
+    const id = Number(result.insertId);
+
+    await log(connection, "CREATE_USER", `Membuat user ${input.username} (ID: ${id})`, actorId);
 
     await connection.commit();
 
     return {
-      id: newUserId,
+      id,
       username: input.username,
-      nama: input.nama,
-      email: input.email,
+      nama: employee.nama_pegawai,
+      email: employee.email,
       id_role: input.id_role,
       nama_role: role.nama_role,
-      id_pegawai: input.id_pegawai,
-      disabled: false,
-      generatedPassword,
+      id_pegawai: employee.id,
+      id_jabatan: input.id_jabatan,
+      id_departemen: input.id_departemen,
+      disabled: input.disabled,
     };
   } catch (error) {
     await connection.rollback();
 
-    if (error && typeof error === "object" && "errno" in error && error.errno === 1062) {
+    if (isDuplicateError(error)) {
       throw new UserServiceError("Data user sudah digunakan.", 409);
     }
 
@@ -339,146 +386,83 @@ export async function createUser(input: CreateUserInput, actorId: number) {
   }
 }
 
-export type UpdateUserInput = {
-  username?: string;
-  nama?: string;
-  email?: string;
-  id_role?: number;
-  id_pegawai?: number | null;
-};
-
-type UserRecord = {
-  id: number;
-  username: string;
-  nama: string;
-  email: string | null;
-  id_role: number;
-  id_pegawai: number | null;
-  disabled: number;
-};
-
-function isDuplicateError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "errno" in error && error.errno === 1062;
-}
-
 export async function updateUser(id: number, input: UpdateUserInput, actorId: number) {
   const connection = await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const rows = await connection.query<UserRecord[]>(
-      `
-      SELECT
-        id, username, nama, email,
-        id_role, id_pegawai, disabled
-      FROM \`user\`
-      WHERE id = ?
-        AND deleted_at IS NULL
-      FOR UPDATE
-      `,
-      [id],
-    );
+    const existing = await lockUser(connection, id);
 
-    const existing = rows[0];
+    const roleId = input.id_role ?? existing.id_role;
+    const employeeId = input.id_pegawai ?? existing.id_pegawai;
+    const username = input.username ?? existing.username;
 
-    if (!existing) {
-      throw new UserServiceError("Pengguna tidak ditemukan.", 404);
+    if (!employeeId) {
+      throw new UserServiceError("Pilih pegawai untuk akun ini.");
     }
 
-    const next = {
-      username: input.username ?? existing.username,
-      nama: input.nama ?? existing.nama,
-      email: input.email ?? existing.email,
-      id_role: input.id_role ?? existing.id_role,
-      id_pegawai: input.id_pegawai === undefined ? existing.id_pegawai : input.id_pegawai,
-    };
-
-    // Jangan izinkan Superadmin mengganti role
-    // akunnya sendiri melalui endpoint ini.
-    if (id === actorId && next.id_role !== existing.id_role) {
+    if (id === actorId && roleId !== existing.id_role) {
       throw new UserServiceError("Tidak boleh mengubah role akun sendiri.", 403);
     }
 
-    const roles = await connection.query<Array<{ id: number }>>(`SELECT id FROM user_role WHERE id = ? LIMIT 1`, [next.id_role]);
+    await requireRole(connection, roleId);
 
-    if (!roles.length) {
-      throw new UserServiceError("Role tidak ditemukan.", 404);
-    }
+    const employee = await requireEmployee(connection, employeeId);
 
-    if (next.id_pegawai !== null) {
-      const employees = await connection.query<Array<{ id: number }>>(`SELECT id FROM pegawai WHERE id = ? LIMIT 1`, [next.id_pegawai]);
+    const positionId = input.id_jabatan ?? employee.id_jabatan;
+    const departmentId = input.id_departemen ?? employee.id_departemen;
 
-      if (!employees.length) {
-        throw new UserServiceError("Pegawai tidak ditemukan.", 404);
-      }
-    }
+    await validateMaster(connection, positionId, "jabatan");
+    await validateMaster(connection, departmentId, "departemen");
 
-    const duplicates = await connection.query<Array<{ id: number }>>(
-      `
-      SELECT id
-      FROM \`user\`
-      WHERE id <> ?
-        AND (
-          username = ?
-          OR email = ?
-          OR (
-            ? IS NOT NULL
-            AND id_pegawai = ?
-          )
-        )
-      LIMIT 1
-      `,
-      [id, next.username, next.email, next.id_pegawai, next.id_pegawai],
-    );
-
-    if (duplicates.length) {
-      throw new UserServiceError("Username, email, atau pegawai sudah digunakan.", 409);
-    }
+    await validateUnique(connection, username, employee.email, employee.id, id);
 
     await connection.query(
       `
-      UPDATE \`user\`
-      SET
-        username = ?,
-        nama = ?,
-        email = ?,
-        id_role = ?,
-        id_pegawai = ?,
-        updated_at = CURRENT_TIMESTAMP()
-      WHERE id = ?
-        AND deleted_at IS NULL
+        UPDATE \`user\`
+        SET
+          username = ?,
+          nama = ?,
+          email = ?,
+          id_role = ?,
+          id_pegawai = ?,
+          updated_at = CURRENT_TIMESTAMP()
+        WHERE id = ?
       `,
-      [next.username, next.nama, next.email, next.id_role, next.id_pegawai, id],
+      [username, employee.nama_pegawai, employee.email, roleId, employee.id, id],
     );
-
-    if (next.id_role !== existing.id_role) {
-      await connection.query(
-        `
-    UPDATE auth_sessions
-    SET revoked_at = UTC_TIMESTAMP(3)
-    WHERE id_user = ?
-      AND revoked_at IS NULL
-    `,
-        [id],
-      );
-    }
 
     await connection.query(
       `
-      INSERT INTO activities
-        (title, content, created_by)
-      VALUES (?, ?, ?)
+        UPDATE pegawai
+        SET
+          id_jabatan = ?,
+          id_departemen = ?,
+          updated_at = CURRENT_TIMESTAMP()
+        WHERE id = ?
       `,
-      ["UPDATE_USER", `Memperbarui user ID ${id} (${next.username})`, actorId],
+      [positionId, departmentId, employee.id],
     );
+
+    if (roleId !== existing.id_role || employee.id !== existing.id_pegawai) {
+      await revokeSessions(connection, id);
+    }
+
+    await log(connection, "UPDATE_USER", `Memperbarui user ${username} (ID: ${id})`, actorId);
 
     await connection.commit();
 
     return {
       id,
-      ...next,
-      disabled: Boolean(existing.disabled),
+      username,
+      nama: employee.nama_pegawai,
+      email: employee.email,
+      id_role: roleId,
+      id_pegawai: employee.id,
+      id_jabatan: positionId,
+      id_departemen: departmentId,
+      disabled: Number(existing.disabled) !== 0,
     };
   } catch (error) {
     await connection.rollback();
@@ -494,76 +478,35 @@ export async function updateUser(id: number, input: UpdateUserInput, actorId: nu
 }
 
 export async function changeUserStatus(id: number, disabled: boolean, actorId: number) {
+  if (id === actorId && disabled) {
+    throw new UserServiceError("Tidak boleh menonaktifkan akun sendiri.", 403);
+  }
+
   const connection = await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const rows = await connection.query<UserRecord[]>(
-      `
-      SELECT
-        id, username, nama, email,
-        id_role, id_pegawai, disabled
-      FROM \`user\`
-      WHERE id = ?
-        AND deleted_at IS NULL
-      FOR UPDATE
-      `,
-      [id],
-    );
-
-    const user = rows[0];
-
-    if (!user) {
-      throw new UserServiceError("Pengguna tidak ditemukan.", 404);
-    }
-
-    // Hindari Superadmin mengunci akunnya sendiri.
-    if (id === actorId && disabled) {
-      throw new UserServiceError("Tidak boleh menonaktifkan akun sendiri.", 403);
-    }
+    const user = await lockUser(connection, id);
 
     await connection.query(
       `
-      UPDATE \`user\`
-      SET
-        disabled = ?,
-        updated_at = CURRENT_TIMESTAMP()
-      WHERE id = ?
-        AND deleted_at IS NULL
+        UPDATE \`user\`
+        SET disabled = ?, updated_at = CURRENT_TIMESTAMP()
+        WHERE id = ?
       `,
       [disabled ? 1 : 0, id],
     );
 
-    // Saat disabled, semua sesi aktif dicabut.
     if (disabled) {
-      await connection.query(
-        `
-        UPDATE auth_sessions
-        SET revoked_at = UTC_TIMESTAMP(3)
-        WHERE id_user = ?
-          AND revoked_at IS NULL
-        `,
-        [id],
-      );
+      await revokeSessions(connection, id);
     }
 
-    await connection.query(
-      `
-      INSERT INTO activities
-        (title, content, created_by)
-      VALUES (?, ?, ?)
-      `,
-      [disabled ? "DISABLE_USER" : "ENABLE_USER", `${disabled ? "Menonaktifkan" : "Mengaktifkan"} user ${user.username} (ID: ${id})`, actorId],
-    );
+    await log(connection, disabled ? "DISABLE_USER" : "ENABLE_USER", `${disabled ? "Menonaktifkan" : "Mengaktifkan"} user ${user.username} (ID: ${id})`, actorId);
 
     await connection.commit();
 
-    return {
-      id,
-      username: user.username,
-      disabled,
-    };
+    return { id, username: user.username, disabled };
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -582,62 +525,27 @@ export async function deleteUser(id: number, actorId: number) {
   try {
     await connection.beginTransaction();
 
-    const rows = await connection.query<UserRecord[]>(
+    const user = await lockUser(connection, id);
+
+    await connection.query(
       `
-      SELECT
-        id, username, nama, email,
-        id_role, id_pegawai, disabled
-      FROM \`user\`
-      WHERE id = ?
-        AND deleted_at IS NULL
-      FOR UPDATE
+        UPDATE \`user\`
+        SET
+          disabled = 1,
+          deleted_at = UTC_TIMESTAMP(),
+          updated_at = CURRENT_TIMESTAMP()
+        WHERE id = ?
       `,
       [id],
     );
 
-    const user = rows[0];
+    await revokeSessions(connection, id);
 
-    if (!user) {
-      throw new UserServiceError("Pengguna tidak ditemukan.", 404);
-    }
-
-    await connection.query(
-      `
-      UPDATE \`user\`
-      SET
-        disabled = 1,
-        deleted_at = UTC_TIMESTAMP(),
-        updated_at = CURRENT_TIMESTAMP()
-      WHERE id = ?
-      `,
-      [id],
-    );
-
-    await connection.query(
-      `
-      UPDATE auth_sessions
-      SET revoked_at = UTC_TIMESTAMP(3)
-      WHERE id_user = ?
-        AND revoked_at IS NULL
-      `,
-      [id],
-    );
-
-    await connection.query(
-      `
-      INSERT INTO activities
-        (title, content, created_by)
-      VALUES (?, ?, ?)
-      `,
-      ["DELETE_USER", `Menghapus user ${user.username} (ID: ${id})`, actorId],
-    );
+    await log(connection, "DELETE_USER", `Menghapus user ${user.username} (ID: ${id})`, actorId);
 
     await connection.commit();
 
-    return {
-      id,
-      username: user.username,
-    };
+    return { id, username: user.username };
   } catch (error) {
     await connection.rollback();
     throw error;
