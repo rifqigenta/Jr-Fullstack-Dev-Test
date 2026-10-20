@@ -59,6 +59,7 @@ const form = reactive({
       tahun_lulus: "",
     },
   ],
+  riwayat_keluarga: [],
 });
 
 const age = computed(() => {
@@ -138,10 +139,22 @@ function addEducation() {
     tahun_lulus: "",
   });
 }
+function addFamily() {
+  if (form.riwayat_keluarga.length >= 20) return;
+
+  form.riwayat_keluarga.push({
+    nama_keluarga: "",
+    alamat: [],
+  });
+}
 
 function removeEducation(index) {
   if (form.pendidikan.length <= 1) return;
   form.pendidikan.splice(index, 1);
+}
+function removeFamilyHistory(index) {
+  if (form.riwayat_keluarga.length <= 1) return;
+  form.riwayat_keluarga.splice(index, 1);
 }
 
 function validateForm() {
@@ -257,8 +270,16 @@ async function saveEmployee() {
         nama_sekolah: item.nama_sekolah.trim(),
         tahun_lulus: Number(item.tahun_lulus),
       })),
+      riwayat_keluarga: form.riwayat_keluarga.map((item) => ({
+        nama_keluarga: item.nama_keluarga,
+        riwayat_alamat: item.riwayat_alamat.map((items) => ({
+          id_riwayat: items.id_riwayat,
+          alamat: items.alamat,
+        })),
+      })),
     };
 
+    console.log("click");
     const response = await request(savedId.value ? `/employees/${savedId.value}` : "/employees", {
       method: savedId.value ? "PATCH" : "POST",
       body: payload,
@@ -281,7 +302,7 @@ async function saveEmployee() {
     }
   } catch (value) {
     const detail = readApiError(value);
-
+    console.log("error : ", value);
     if (employeeSaved) {
       message.value = "Data pegawai sudah tersimpan. Foto belum berhasil diunggah.";
       error.value = `${detail} Klik Simpan lagi untuk mencoba ulang pada pegawai yang sama.`;
@@ -612,7 +633,6 @@ onBeforeUnmount(revokePreview);
 
           <div class="d-flex justify-content-between align-items-center mb-3">
             <h3 class="mb-0">Riwayat Pendidikan</h3>
-
             <button type="button" class="btn btn-outline-primary" :disabled="form.pendidikan.length >= 20" @click="addEducation">+ Tambah Pendidikan</button>
           </div>
 
@@ -641,6 +661,32 @@ onBeforeUnmount(revokePreview);
 
             <div class="col-md-2 d-flex align-items-end">
               <button type="button" class="btn btn-outline-danger w-100" :disabled="form.pendidikan.length <= 1" :aria-label="`Hapus pendidikan baris ${index + 1}`" @click="removeEducation(index)">
+                Hapus
+              </button>
+            </div>
+          </div>
+
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h3 class="mb-0">Riwayat Keluarga</h3>
+
+            <button type="button" class="btn btn-outline-primary" :disabled="form.riwayat_keluarga.length >= 20" @click="addFamily">+ Tambah Keluarga</button>
+          </div>
+
+          <div v-for="(item, index) in form.riwayat_keluarga" :key="index" class="row g-2 mb-3">
+            <div class="col-md-3">
+              <label :for="`family-history-${index}`" class="form-label required"> Nama Keluarga </label>
+
+              <input v-model="item.nama_keluarga" maxlength="50" placeholder="Masukkan Nama Keluarga" class="form-control" required />
+            </div>
+
+            <div class="col-md-2 d-flex align-items-end">
+              <button
+                type="button"
+                class="btn btn-outline-danger w-100"
+                :disabled="form.riwayat_keluarga.length <= 1"
+                :aria-label="`Hapus pendidikan baris ${index + 1}`"
+                @click="removeFamilyHistory(index)"
+              >
                 Hapus
               </button>
             </div>

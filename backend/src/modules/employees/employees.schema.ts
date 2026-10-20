@@ -12,6 +12,15 @@ const educationSchema = z
   })
   .strict();
 
+const familyAddressSchema = z.object({
+  alamat: z.string().trim().min(1, "Alamat mohon diisi.").max(255),
+});
+
+const familySchema = z.object({
+  nama_keluarga: z.string().trim().min(1, "Nama keluarga wajib diisi.").max(150, "Nama keluarga maksimal 150 karakter."),
+  riwayat_alamat: z.array(familyAddressSchema).max(10),
+});
+
 export const employeeFieldsSchema = z
   .object({
     nip: z.string().regex(/^\d{8,}$/, "NIP minimal 8 digit, hanya boleh angka dan tanpa spasi."),
@@ -49,6 +58,8 @@ export const employeeFieldsSchema = z
     status_kontrak: z.enum(["PKWTT", "PKWT", "Magang"]),
 
     pendidikan: z.array(educationSchema).max(20, "Minimal satu riwayat pendidikan wajib diisi.").max(20, "Maksimal 20 riwayat pendidikan."),
+
+    riwayat_keluarga: z.array(familySchema).max(10),
   })
   .strict();
 

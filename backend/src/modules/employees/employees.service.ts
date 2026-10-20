@@ -28,6 +28,15 @@ type EducationRow = {
   nama_sekolah: string;
   tahun_lulus: number;
 };
+type FamilyRow = {
+  id: number;
+  nama_keluarga: string;
+};
+type FamilyAddressRow = {
+  id: number;
+  id_riwayat: number;
+  alamat: string;
+};
 
 type EmployeeRow = {
   id: number;
@@ -186,6 +195,36 @@ async function insertEducation(connection: PoolConnection, employeeId: number, e
       `,
       [employeeId, item.tingkat_pendidikan, item.nama_sekolah, item.tahun_lulus],
     );
+  }
+}
+
+async function insertFamily(connection: PoolConnection, employeeId: number, history: CreateEmployeeInput["riwayat_keluarga"]) {
+  for (const item of history) {
+    const result = await connection.query(
+      `
+        INSERT INTO pegawai_riwayat_keluarga (
+          id_pegawai,
+          nama_keluarga,
+        )
+        VALUES (?, ?)
+      `,
+      [employeeId, item.nama_keluarga],
+    );
+
+    const historyId = Number(result.insertId);
+
+    for (const history of item.riwayat_alamat) {
+      await connection.query(
+        `
+          INSERT INTO pegawai_riwayat_keluarga_alamat (
+          id_riwayat, 
+          alamat
+          )
+          VALUES (?, ?)
+        `,
+        [historyId, history.alamat],
+      );
+    }
   }
 }
 
@@ -352,11 +391,46 @@ export async function getEmployeeById(id: number) {
     [id],
   );
 
+  const family = await pool.query<FamilyRow[]>(
+    `
+    SELECT
+      id, 
+      id_pegawai,
+      nama_keluarga
+    FROM pegawai_riwayat_keluarga
+    WHERE id_pegawai = ?
+    ORDER BY id ASC
+    `,
+    [id],
+  );
+  const familyAddress = await pool.query<FamilyAddressRow[]>(
+    `
+      SELECT 
+        riwayat_alamat.id,
+        riwayat_alamat.id_riwayat,
+        riwayat_alamat.alamat
+      FROM pegawai_riwayat_keluarga_alamat as faddress
+      JOIN pegawai_riwayat_keluarga AS hist
+        ON hist.id = faddress.id_riwayat
+      WHERE hist.id_pegawai = ?
+    `,
+    [id],
+  );
+
   return {
     ...normalizeEmployee(employee),
     pendidikan: education.map((item) => ({
       ...item,
       tahun_lulus: Number(item.tahun_lulus),
+    })),
+    riwayat_keluarga: family.map((hist) => ({
+      ...hist,
+      riwayat_alamat: familyAddress
+        .filter((riwayat_alamat) => riwayat_alamat.id_riwayat === hist.id)
+        .map((riwayat_alamat) => ({
+          id: riwayat_alamat.id,
+          alamat: riwayat_alamat.alamat,
+        })),
     })),
   };
 }
@@ -384,6 +458,7 @@ export async function createEmployee(input: CreateEmployeeInput, actorId: number
     const employeeId = Number(result.insertId);
 
     await insertEducation(connection, employeeId, input.pendidikan);
+    await insertFamily(connection, employeeId, input.riwayat_keluarga);
 
     await recordActivity(connection, "CREATE_EMPLOYEE", `Membuat pegawai ${input.nama_pegawai} (ID: ${employeeId}, NIP: ${input.nip})`, actorId);
 
